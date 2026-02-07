@@ -138,8 +138,7 @@
 
 "⎆""read file" D
 "⇪""write file (path content)" D
-
-"⍞""read char from input" D
+##"⍞""read char from input" D
 "⏏""halt" D
 
 # Additional library words
@@ -240,5 +239,3 @@
 # String repeat: "s" n -> "sss..."
 {:n :s ""{s⧺}n⍣}:⍴
 "⍴""repeat string n times" D
-
-

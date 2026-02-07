@@ -256,7 +256,7 @@ kernel_op('🠗') --> buf_down.
 kernel_op('⊚', S0, S) :- buf_text(S0, T), stack_push(str(T), S0, S).
 
 %%% Input / Halt
-kernel_op('⍞') --> set_mode(read_char).
+%%kernel_op('⍞') --> set_mode(read_char).
 kernel_op('⏏') --> set_mode(halted).
 
 %%% File I/O
