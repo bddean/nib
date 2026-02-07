@@ -1,4 +1,244 @@
-{~}:d
-{⇅⊖}:n
-{'t⍃~'t⍂⇅}:o
-{'t⍃⇅'t⍂⇅}:r
+# Nib prelude: standard library and self-documentation system
+#
+# TODO: Library words from DESIGN still to implement
+# [x] Stack: d(dup) n(nip) o(over) r(rot) W(dip) K(keep)
+# [x] Logic: ∧(and) ∨(or) ¬(not/kernel) ⊤(true) ⊥(false)
+# [x] Arithmetic: N(negate) A(abs) m(min) M(max) ⌊ ⌈ — kernel
+# [x] List: S(sum) P(product) L(last) R(range) Z(zip)
+# [x] Map: ⩑(delete key) — kernel
+# [x] Clipboard: ✂(cut) ⎘(copy/yank) p(paste)
+# [x] Undo: ↶ ↷ (undo/redo via history register)
+# [x] Error handling: ⚠(raise) ⊘(clear)
+# [x] File I/O: ⎆(read) ⇪(write) — kernel
+# [x] String: ⍘ ⍙(codepoints) ⊗(split) ⍎(parse) ⍴(repeat) J(join) — kernel+lib
+# [x] Comparison: ⋖ ⋗(lex cmp) — kernel
+# [x] Register: ⍀(clear) — kernel
+# [x] Combinators: B(bi) ⍉(transpose)
+# [x] Movement: ⇤ ⇥(line) 🠕 🠗(up/down) — kernel
+# --- still TODO (reader/syntax, needs careful design) ---
+# [ ] Bracket list: [ ] (sentinel-based collector)
+# [ ] Map literal: ⟨ ⟩ reader
+# [ ] Grouping: ( ) reader
+# [ ] Syntactic unit reader: ⎕
+# [ ] Insert mode: i ✎
+#
+# Bootstrap: define basic stack manipulation words first
+
+{~}:d              # dup: duplicate top of stack
+{⇅⊖}:n             # nip: remove second item (swap drop)
+{'t⍃~'t⍂⇅}:o       # over: copy second item to top
+{'t⍃⇅'t⍂⇅}:r       # rot: rotate top 3 items (a b c -> b c a)
+
+# Initialize documentation system
+# __doc__ register holds a map of symbol names to descriptions
+
+∅⍚"__doc__"⍃      # Create empty map in __doc__ register
+
+# D word: document a symbol
+# Stack: name desc -> (updates __doc__ register)
+{oo"__doc__"⍊rr⩐"__doc__"⍂⊖"__doc__"⍃⊖⊖}:D
+
+# Document bootstrap words
+"d""duplicate TOS" D
+"n""remove second item" D
+"o""copy second item to top" D
+"r""rotate top 3 (a b c -> b c a)" D
+
+# Document kernel operators
+"~""duplicate TOS" D
+"⇅""swap top 2" D
+"⊖""drop TOS" D
+"⌗""selection index (0)" D
+
+"+""add" D
+"-""subtract" D
+"*""multiply" D
+"/""divide" D
+"×""multiply" D
+"÷""divide" D
+"|""modulo" D
+"^""exponentiation" D
+
+"=""equal" D
+"≠""not equal" D
+"<""less than" D
+">""greater than" D
+"≤""less or equal" D
+"≥""greater or equal" D
+"⋖""lexicographic less" D
+"⋗""lexicographic greater" D
+
+"¬""logical not" D
+"?""if (peek condition)" D
+"!""if-not (peek condition)" D
+
+"@""eval with new scope" D
+"⊛""eval (no new scope)" D
+
+"⍃""push to register" D
+"⍂""pop from register" D
+"⍊""peek register" D
+"⍁""unpop register" D
+"⍀""clear register" D
+"⍈""register next" D
+"⍇""register prev" D
+
+"⧺""concat sequences" D
+"‖""length" D
+"⌿""slice" D
+"⊣""head" D
+"⊢""tail" D
+"⌽""reverse" D
+
+"∅""empty list" D
+"♯""sharpen (str->quot)" D
+"♭""flatten (quot->str)" D
+"⍚""list to map" D
+"⍛""map to list" D
+"⧰""is-number" D
+"⍕""format value" D
+"⍎""parse string to value" D
+"⊗""split string by delimiter" D
+
+"⊂""collect N items" D
+"⊃""spread list" D
+"·""lookup" D
+"⩐""set key" D
+"⩑""delete key" D
+"⊜""keep (filter)" D
+"⊝""reject" D
+"⍋""sort ascending" D
+"⍒""sort descending" D
+"∊""member" D
+"⍳""index of" D
+
+"⍣""repeat N times" D
+"⍤""while (do-while)" D
+"¨""map over list" D
+"/""fold/reduce" D
+
+"⎗""insert to buffer" D
+"⌫""delete back" D
+"⌦""delete forward" D
+"🠔""move left" D
+"🠖""move right" D
+"⤒""buffer home" D
+"⤓""buffer end" D
+"⇤""line start" D
+"⇥""line end" D
+"🠕""move up" D
+"🠗""move down" D
+"⊚""buffer text" D
+
+"⌊""floor" D
+"⌈""ceil" D
+
+"⍘""string to codepoints" D
+"⍙""codepoints to string" D
+
+"⎆""read file" D
+"⇪""write file (path content)" D
+
+"⍞""read char from input" D
+"⏏""halt" D
+
+# Additional library words
+
+# Logic
+{0≠⇅0≠*}:∧         # and: (a b -> bool)
+"∧""logical and" D
+
+{0≠⇅0≠+0>}:∨        # or: (a b -> bool)
+"∨""logical or" D
+
+1:⊤                 # true constant
+"⊤""true (1)" D
+
+0:⊥                 # false constant
+"⊥""false (0)" D
+
+# Arithmetic
+{0⇅-}:N             # negate: (n -> -n)
+"N""negate number" D
+
+{~0<{N}?⊖}:A        # abs: (n -> |n|)
+"A""absolute value" D
+
+{oo<{⊖}{⇅⊖}?⊖}:m    # min: (a b -> min)
+"m""minimum of two" D
+
+{oo>{⊖}{⇅⊖}?⊖}:M    # max: (a b -> max)
+"M""maximum of two" D
+
+# List operations
+{0⇅{+}/}:S          # sum: (list -> total)
+"S""sum of list" D
+
+{1⇅{*}/}:P          # product: (list -> product)
+"P""product of list" D
+
+{⌽⊣}:L              # last: (list -> last-item)
+"L""last item in list" D
+
+# Combinators
+{⇅'t⍃@'t⍂}:W        # dip: (x q -> ... x) - apply q with x saved
+"W""dip: run quot with TOS saved" D
+
+{o⇅@}:K             # keep: (x q -> ... x) - apply q to copy of x
+"K""keep: run quot on copy of TOS" D
+
+# Clipboard (uses __kill__ register)
+{⊚"__kill__"⍃}:⎘     # yank: buffer text -> __kill__ register
+"⎘""yank (copy) to kill register" D
+
+{⎘⤒⊚‖{⌦}⇅⍣}:✂       # cut: yank then delete all buffer text
+"✂""cut to kill register" D
+
+{"__kill__"⍊⎗}:p      # paste: peek __kill__, insert to buffer
+"p""paste from kill register" D
+
+# Undo/redo (uses __history__ register)
+{"__history__"⍂⊖}:↶   # undo: pop from history
+"↶""undo" D
+
+{"__history__"⍁}:↷    # redo: unpop history
+"↷""redo" D
+
+# Error handling (uses __errors__ register)
+{"__errors__"⍃}:⚠     # raise: push TOS to errors
+"⚠""raise error" D
+
+{"__errors__"⍂⊖}:⊘    # clear: pop and discard one error
+"⊘""clear error" D
+
+# Range: n -> [0, 1, ..., n-1]
+# repeat n times: each time push counter, wrap, append to acc
+{:n 0'i⍃ ∅
+ {'i⍊1⊂⧺ 'i⍂1+'i⍃}   # append [i], inc i
+ n⍣                    # repeat n times
+ 'i⍂⊖                  # clean up counter reg
+}:R
+"R""range (n -> [0..n-1])" D
+
+# Transpose: list of lists -> transposed list of lists
+# [[1,2],[3,4]] -> [[1,3],[2,4]]
+{:l l0·‖R{:i l{i·}¨}¨}:⍉
+"⍉""transpose list of lists" D
+
+# bi: apply two quotations to same value (x {p} {q} -> p(x) q(x))
+{:q :p ~p⇅q}:B
+"B""bi: apply two quots to same value" D
+
+# Zip: pair elements from two lists ([a] [b] -> [[a0 b0] [a1 b1] ...])
+{:b :a a‖R{:i a i· b i· 2⊂}¨}:Z
+"Z""zip two lists" D
+
+# Flatten list of strings into one string
+{""{⧺}/}:J
+"J""join list of strings" D
+
+# String repeat: "s" n -> "sss..."
+{:n :s ""{s⧺}n⍣}:⍴
+"⍴""repeat string n times" D
+
+

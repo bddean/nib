@@ -38,6 +38,7 @@ is_halted(state(_,_,_,_,halted)).
 
 flush_mode(state(B,St,Sc,R,read_number(N)), S) :- !,
 	stack_push(num(N), state(B,St,Sc,R,normal), S).
+flush_mode(state(B,St,Sc,R,comment), state(B,St,Sc,R,normal)) :- !.
 flush_mode(S, S).
 
 %%%% --- Step ---
@@ -47,6 +48,8 @@ step(Char, state(B,St,Sc,R,Mode), S) :-
 
 step_mode(halted, _, S, S).
 step_mode(normal, Char, S0, S) :- step_normal(Char, S0, S).
+step_mode(comment, '\n', S0, S) :- !, set_mode(normal, S0, S).
+step_mode(comment, _, S, S).
 
 step_mode(read_number(N), Char, S0, S) :-
 	digit_char(Char, D), !, N1 is N*10+D, set_mode(read_number(N1), S0, S).
@@ -77,6 +80,7 @@ step_mode(read_bind, Char, S0, S) :-
 step_normal(' ', S, S) :- !.
 step_normal('\t', S, S) :- !.
 step_normal('\n', S, S) :- !.
+step_normal('#', S0, S) :- !, set_mode(comment, S0, S).
 step_normal(C, S0, S) :- digit_char(C, D), !, set_mode(read_number(D), S0, S).
 step_normal('"', S0, S) :- !, set_mode(read_string([]), S0, S).
 step_normal('{', S0, S) :- !, set_mode(read_quote([],0), S0, S).
@@ -107,6 +111,8 @@ kernel_op('×') --> kernel_op('*').
 kernel_op('÷') --> kernel_op('/').
 kernel_op('|') --> arith(mod).
 kernel_op('^') --> arith(**).
+kernel_op('⌊') --> stack_pop(num(N)), { R is floor(N) }, stack_push(num(R)).
+kernel_op('⌈') --> stack_pop(num(N)), { R is ceiling(N) }, stack_push(num(R)).
 
 %%% Comparison (push 1 or 0)
 kernel_op('=') --> stack_pop(B), stack_pop(A), push_bool(A = B).
@@ -115,6 +121,12 @@ kernel_op('<') --> num_cmp(<).
 kernel_op('>') --> num_cmp(>).
 kernel_op('≤') --> num_cmp(=<).
 kernel_op('≥') --> num_cmp(>=).
+kernel_op('⋖') -->
+	stack_pop(str(B)), stack_pop(str(A)),
+	push_bool(A @< B).
+kernel_op('⋗') -->
+	stack_pop(str(B)), stack_pop(str(A)),
+	push_bool(A @> B).
 
 %%% Logic
 kernel_op('¬') -->
@@ -155,6 +167,9 @@ kernel_op('⍈') -->
 kernel_op('⍇') -->
 	stack_pop(str(N)), { atom_string(RN, N) },
 	get_reg(RN, RT0), { rtree_prev(RT0, RT) }, set_reg(RN, RT).
+kernel_op('⍀') -->
+	stack_pop(str(N)), { atom_string(RN, N) },
+	get_reg(RN, RT0), { rtree_clear(RT0, RT) }, set_reg(RN, RT).
 
 %%% Sequences
 kernel_op('⧺') --> stack_pop(B), stack_pop(A), { concat_values(A,B,R) }, stack_push(R).
@@ -174,6 +189,19 @@ kernel_op('⍚') --> apply_stack([list(L)], [map(L)]).
 kernel_op('⍛') --> apply_stack([map(M)], [list(M)]).
 kernel_op('⧰') --> stack_pop(V), push_bool(V = num(_)).
 kernel_op('⍕') --> stack_pop(V), { format_value(V, Str) }, stack_push(str(Str)).
+kernel_op('⍎') --> stack_pop(str(S)), { parse_value(S, V) }, stack_push(V).
+kernel_op('⊗') -->
+	stack_pop(str(Sep)), stack_pop(str(S)),
+	{ atom_string(SepA, Sep), atom_string(SA, S),
+	  atomic_list_concat(PartsA, SepA, SA),
+	  maplist([A,str(Str)]>>atom_string(A,Str), PartsA, Vals) },
+	stack_push(list(Vals)).
+kernel_op('⍘') -->
+	stack_pop(str(S)), { string_codes(S, Codes), maplist(wrap_num, Codes, Nums) },
+	stack_push(list(Nums)).
+kernel_op('⍙') -->
+	stack_pop(list(Nums)), { maplist(unwrap_num, Nums, Codes), string_codes(S, Codes) },
+	stack_push(str(S)).
 
 %%% List ops
 kernel_op('⊂') -->
@@ -186,6 +214,9 @@ kernel_op('·') -->
 kernel_op('⩐') -->
 	stack_pop(V), stack_pop(Key), stack_pop(Coll),
 	{ set_value(Coll, Key, V, R) }, stack_push(R).
+kernel_op('⩑') -->
+	stack_pop(Key), stack_pop(Coll),
+	{ delete_value(Coll, Key, R) }, stack_push(R).
 kernel_op('⊜') -->
 	stack_pop(quot(Code)), stack_pop(list(Xs)),
 	filter_list(Code, true, Xs, Ys), stack_push(list(Ys)).
@@ -218,11 +249,26 @@ kernel_op('🠔') --> buf_left(1).
 kernel_op('🠖') --> buf_right(1).
 kernel_op('⤒') --> buf_home.
 kernel_op('⤓') --> buf_end.
+kernel_op('⇤') --> buf_line_start.
+kernel_op('⇥') --> buf_line_end.
+kernel_op('🠕') --> buf_up.
+kernel_op('🠗') --> buf_down.
 kernel_op('⊚', S0, S) :- buf_text(S0, T), stack_push(str(T), S0, S).
 
 %%% Input / Halt
 kernel_op('⍞') --> set_mode(read_char).
 kernel_op('⏏') --> set_mode(halted).
+
+%%% File I/O
+kernel_op('⎆') -->
+	stack_pop(str(Path)),
+	{ read_file_to_string(Path, Content, []) },
+	stack_push(str(Content)).
+kernel_op('⇪') -->
+	stack_pop(str(Content)), stack_pop(str(Path)),
+	{ open(Path, write, Out),
+	  write(Out, Content),
+	  close(Out) }.
 
 %%%% ================================================================
 %%%% HELPERS
@@ -246,6 +292,9 @@ num_cmp(Op) -->
 push_bool(Test) --> ( {Test} -> stack_push(num(1)) ; stack_push(num(0)) ).
 
 truthy(V) :- V \= num(0).
+
+wrap_num(C, num(C)).
+unwrap_num(num(C), C).
 
 %%% Digits
 
@@ -325,6 +374,10 @@ format_value(map(M), S) :- format(string(S), "⟨~w⟩", [M]).
 atomics_to_text([], "").
 atomics_to_text([H|T], S) :- atomics_to_text(T, R), string_concat(H, R, S).
 
+%%% Parse (string -> value)
+parse_value(S, num(N)) :- number_string(N, S), !.
+parse_value(S, str(S)).
+
 %%% Iteration helpers
 
 repeat_n(0, _) --> !.
@@ -373,6 +426,9 @@ lookup_value(map(Pairs), Key, V) :- map_get(Pairs, Key, V).
 set_value(list(L0), num(I), V, list(L)) :- set_nth0(I, L0, V, L).
 set_value(map(P0), Key, V, map(P)) :- map_set(P0, Key, V, P).
 
+delete_value(list(L0), num(I), list(L)) :- delete_nth0(I, L0, L).
+delete_value(map(P0), Key, map(P)) :- map_delete(P0, Key, P).
+
 map_get([K,V|_], K, V) :- !.
 map_get([_,_|Rest], K, V) :- map_get(Rest, K, V).
 
@@ -380,8 +436,15 @@ map_set([], K, V, [K,V]).
 map_set([K,_|Rest], K, V, [K,V|Rest]) :- !.
 map_set([K2,V2|R0], K, V, [K2,V2|R]) :- map_set(R0, K, V, R).
 
+map_delete([], _, []).
+map_delete([K,_|Rest], K, Rest) :- !.
+map_delete([K2,V2|R0], K, [K2,V2|R]) :- map_delete(R0, K, R).
+
 set_nth0(0, [_|T], V, [V|T]) :- !.
 set_nth0(I, [H|T0], V, [H|T]) :- I > 0, I1 is I-1, set_nth0(I1, T0, V, T).
+
+delete_nth0(0, [_|T], T) :- !.
+delete_nth0(I, [H|T0], [H|T]) :- I > 0, I1 is I-1, delete_nth0(I1, T0, T).
 
 %%% Buffer ops
 
@@ -415,3 +478,54 @@ buf_end(
 	state(buf(L0,R), St, Sc, Rg, M),
 	state(buf(L,[]), St, Sc, Rg, M)) :-
 	reverse(R, RR), append(RR, L0, L).
+
+%% ⇤ start of line: move left until newline or buffer start
+buf_line_start(state(buf(L,R),St,Sc,Rg,M), state(buf(L2,R2),St,Sc,Rg,M)) :-
+	move_to_line_start(L, R, L2, R2).
+move_to_line_start([], R, [], R) :- !.
+move_to_line_start(['\n'|L], R, ['\n'|L], R) :- !.
+move_to_line_start([C|L], R, L2, R2) :- move_to_line_start(L, [C|R], L2, R2).
+
+%% ⇥ end of line: move right until newline or buffer end
+buf_line_end(state(buf(L,R),St,Sc,Rg,M), state(buf(L2,R2),St,Sc,Rg,M)) :-
+	move_to_line_end(L, R, L2, R2).
+move_to_line_end(L, [], L, []) :- !.
+move_to_line_end(L, ['\n'|R], L, ['\n'|R]) :- !.
+move_to_line_end(L, [C|R], L2, R2) :- move_to_line_end([C|L], R, L2, R2).
+
+%% 🠕 up: move to same column on previous line
+buf_up(S0, S) :-
+	S0 = state(buf(L,_R),_,_,_,_),
+	col_offset(L, 0, Col),
+	buf_line_start(S0, S1),
+	S1 = state(buf(L1,_),_,_,_,_),
+	( L1 = [] -> S = S1              % already at first line
+	; buf_left(1, S1, S2),            % move past \n to prev line
+	  buf_line_start(S2, S3),         % go to start of prev line
+	  S3 = state(buf(_,R3),_,_,_,_),
+	  line_len(R3, 0, LLen),
+	  Move is min(Col, LLen),
+	  buf_right(Move, S3, S)
+	).
+
+%% 🠗 down: move to same column on next line
+buf_down(S0, S) :-
+	S0 = state(buf(L,_),_,_,_,_),
+	col_offset(L, 0, Col),
+	buf_line_end(S0, S1),
+	S1 = state(buf(_,R1),_,_,_,_),
+	( R1 = [] -> S = S1              % already at last line
+	; buf_right(1, S1, S2),           % move past \n to next line
+	  S2 = state(buf(_,R2),_,_,_,_),
+	  line_len(R2, 0, LLen),
+	  Move is min(Col, LLen),
+	  buf_right(Move, S2, S)
+	).
+
+col_offset([], N, N).
+col_offset(['\n'|_], N, N) :- !.
+col_offset([_|L], Acc, N) :- Acc1 is Acc+1, col_offset(L, Acc1, N).
+
+line_len([], N, N).
+line_len(['\n'|_], N, N) :- !.
+line_len([_|R], Acc, N) :- Acc1 is Acc+1, line_len(R, Acc1, N).

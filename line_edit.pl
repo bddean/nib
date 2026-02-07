@@ -275,23 +275,50 @@ subseq(Needle, [_|Rs]) :- subseq(Needle, Rs).
 %%% --- Drawing ---
 
 draw_picker(Syms, FilterRev, Sel, NLines) :-
-	draw_sym_grid(Syms, 0, Sel, 0, NR),
+	%% Fit items per row to terminal width
+	items_per_row(Syms, IPR),
+	MaxRows = 5,
+	MaxItems is IPR * MaxRows,
+	length(Syms, Total),
+	%% Calculate window start: keep selection visible
+	RowOfSel is Sel // IPR,
+	StartRow is max(0, RowOfSel - MaxRows + 1),
+	Skip is StartRow * IPR,
+	drop(Skip, Syms, Rest0),
+	take(MaxItems, Rest0, Visible, _),
+	VisIdx is Skip,
+	draw_sym_grid(Visible, VisIdx, Sel, IPR, 0, NR),
 	reverse(FilterRev, Filter),
 	string_chars(FilterStr, Filter),
-	format("  filter> ~w\e[K", [FilterStr]),
+	format("  filter> ~w  (~w symbols)\e[K", [FilterStr, Total]),
 	flush_output,
 	NLines is NR + 1.
 
-draw_sym_grid([], _, _, NR, NR).
-draw_sym_grid(Syms, Idx, Sel, NR0, NR) :-
-	take(5, Syms, Row, Rest),
+%% Calculate how many items fit in one terminal row
+items_per_row(Syms, N) :-
+	( catch(tty_size(_, Cols), _, fail) -> true ; Cols = 80 ),
+	max_item_width(Syms, 0, MaxW),
+	Avail is Cols - 2,    %% 2-char left margin
+	N0 is max(1, Avail // (MaxW + 2)),  %% +2 for gap between items
+	N is min(N0, 5).
+
+max_item_width([], W, W).
+max_item_width([sym(S, D)|Rest], W0, W) :-
+	string_length(S, SL), string_length(D, DL),
+	IW is SL + 1 + DL,    %% "⇅ swap top 2"
+	W1 is max(W0, IW),
+	max_item_width(Rest, W1, W).
+
+draw_sym_grid([], _, _, _, NR, NR).
+draw_sym_grid(Syms, Idx, Sel, IPR, NR0, NR) :-
+	take(IPR, Syms, Row, Rest),
 	length(Row, RowLen),
 	format("  ", []),
 	draw_row_items(Row, Idx, Sel),
 	format("\e[K\r\n", []),
 	NextIdx is Idx + RowLen,
 	NR1 is NR0 + 1,
-	draw_sym_grid(Rest, NextIdx, Sel, NR1, NR).
+	draw_sym_grid(Rest, NextIdx, Sel, IPR, NR1, NR).
 
 draw_row_items([], _, _).
 draw_row_items([sym(S, N)], Idx, Sel) :- !,
@@ -311,6 +338,10 @@ take(0, R, [], R) :- !.
 take(_, [], [], []) :- !.
 take(N, [H|T], [H|Tk], R) :-
 	N > 0, N1 is N-1, take(N1, T, Tk, R).
+
+drop(0, L, L) :- !.
+drop(_, [], []) :- !.
+drop(N, [_|T], R) :- N > 0, N1 is N-1, drop(N1, T, R).
 
 %% Clear picker, stay on first picker line (for redraw)
 clear_cont(NLines) :-
