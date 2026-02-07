@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+NIB="$DIR/scripts/nib"
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+# Run integration tests in parallel
+for nibfile in "$DIR"/tests/integration/*.nib; do
+	name="${nibfile%.nib}"
+	label="$(basename "$name")"
+	infile="${name}.in"
+	outfile="${name}.out"
+	[ -f "$infile" ] || infile=/dev/null
+	(
+		if actual=$("$NIB" "$nibfile" < "$infile" 2>&1); then
+			if [ -f "$outfile" ]; then expected=$(cat "$outfile"); else expected=""; fi
+			if [ "$actual" = "$expected" ]; then
+				echo "PASS $label"
+			else
+				printf 'FAIL %s\nexpected: %s\nactual:   %s\n' "$label" "$expected" "$actual"
+			fi
+		else
+			printf 'ERR  %s\n%s\n' "$label" "$actual"
+		fi
+	) > "$TMPDIR/$label" &
+done
+
+wait
+
+# Collect results
+pass=0 fail=0 err=0
+for f in "$TMPDIR"/*; do
+	head -1 "$f" | read -r status rest || true
+	case "$(head -1 "$f")" in
+		PASS*) echo "$(head -1 "$f")"; ((pass++)) || true ;;
+		FAIL*) cat "$f"; ((fail++)) || true ;;
+		ERR*)  cat "$f"; ((err++)) || true ;;
+	esac
+done
+
+# Run REPL test if expect is available
+if command -v expect &>/dev/null && [ -f "$DIR/tests/repl.exp" ]; then
+	if expect "$DIR/tests/repl.exp" > "$TMPDIR/repl" 2>&1; then
+		echo "PASS repl"
+		((pass++)) || true
+	else
+		echo "FAIL repl"
+		cat "$TMPDIR/repl"
+		((fail++)) || true
+	fi
+fi
+
+echo "---"
+echo "$pass passed, $fail failed, $err errors"
+[ $fail -eq 0 ] && [ $err -eq 0 ]

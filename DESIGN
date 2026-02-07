@@ -1,0 +1,824 @@
+# Nib
+#
+# Editor inspired by Kakoune with programming model inspired by TECO.
+# Idea: Terse languages like APL prove TECO model can be a "real" programming language.
+# Exact 1-1 correspondence between scripts and interactive usage.
+
+# ============================================================================
+# TYPES
+# ============================================================================
+
+# String   - Immutable text. Literals like "hello" create strings.
+#            Self-quoting: eval is a no-op (pushes itself).
+# Quotation - Code block. Literals like {code} create quotations.
+#            NOT self-quoting: eval executes the code.
+#            Quotations are strings tagged as code — same content, different eval behavior.
+# Buffer   - Mutable text with marks, selections, history, scope.
+#            Buffers are created explicitly (opening files, etc.), not from literals.
+# Number   - Formatted string that remembers its representation.
+#            Arithmetic coerces; 42 stays "42" not "42.0" when written back.
+# Mark     - Logical position in a buffer (buffer-id, anchor).
+#            Stays valid through edits (anchored to text identity, not offset).
+# List     - Ordered collection. Clojure-style persistent vector:
+#            O(log32 n) index/append, structural sharing for undo efficiency.
+# Map      - Distinct type. Ordered key-value pairs: ⟨"a" 1 "b" 2⟩.
+#            · does keyed lookup on maps, positional index on lists.
+#
+# Note: Symbols removed. Use strings or unique strings for sentinels.
+
+# ============================================================================
+# SYNTAX
+# ============================================================================
+
+# Commands are single characters.
+# 'x        → push single-char string "x"
+# "asdf"    → push string
+# {code}    → push quotation (code for later execution)
+#              Nesting: {{x}} is a quotation containing a quotation.
+# (code)    → grouping: execute code with fresh stack, push results to outer stack
+#              Like parens in other languages — isolation, not deferral.
+# ⟨k v ...⟩ → push map (ordered pairs)
+# 123       → push number
+# 123.45    → push number
+#
+# ALL delimiters (' " { } ( ) ⟨ ⟩ [ ]) are library-defined reader functions
+# using input lookahead (⍞). The kernel only provides construction primitives
+# (∅, ∅ₛ, ⊛ₛ, digits, ⧺, etc.). Syntax IS the library.
+#
+# Numbers: Digits 0-9 are kernel primitives that push their value.
+# Multi-digit accumulation is a library reader: first digit pushes fresh,
+# subsequent digits do TOS × 10 + digit, non-digit breaks the sequence.
+#
+# ' is library-defined as {⍞} — read next char, push as string.
+# Since strings are self-quoting, ⍞ alone does the same thing.
+#
+# Terminology (Forth-style):
+#   word      = named code, defined with :
+#   quotation = anonymous code block {...}
+#
+# CRITICAL: There are no multi-character tokens. Spaces are ignored.
+# The input stream is processed one character at a time.
+# A bare char like g means: look up 'g' in scope, eval what you find.
+# So g is exactly equivalent to 'g @.
+#
+# Self-quoting: Numbers, strings, lists, maps evaluate as no-ops (push themselves).
+# Quotations evaluate as code.
+#   "hello" :g             # bind string to 'g' in block scope
+#   g                      # → "hello" (lookup g, eval → string is self-quoting)
+#   {⤒} :g                 # bind quotation to 'g'
+#   g                      # → goes to top of buffer (lookup g, eval → quotation executes)
+#
+# Multi-character names require quoting at BOTH ends:
+#   "hello" "__scope__" "greeting" _ ⩐     # store under multi-char key
+#   "__scope__" "greeting" · @             # retrieve by multi-char key
+
+# ============================================================================
+# LIST CONSTRUCTION
+# ============================================================================
+
+# Three syntaxes, different ergonomics:
+
+'h 'j 'k 'l 4 ⊂       # count-based: collect top 4 items into list
+[ 'h 'j 'k 'l ]       # bracketed: [ pushes sentinel symbol, ] collects to list
+# 'h 'j 'k 'l ####    # APL-style: auto-wrap (syntax TBD)
+
+# ============================================================================
+# MAPS (ORDERED PAIRS)
+# ============================================================================
+
+# Maps are a distinct type: ordered key-value pairs.
+# Not lists of pairs — a separate type with its own semantics.
+
+# Construction:
+⟨ "name" "Alice" "age" 30 ⟩     # literal map: name→Alice, age→30
+
+# Unified lookup with ·
+list 0 ·                        # list index: get element 0
+map "key" ·                     # map lookup: find pair with key, return value
+
+# Other ops:
+map "key" value ⩐               # set/update key
+map '⊣ ¨                        # keys
+map '⊢ ¨                        # values
+map "key" ∈                     # has key? (sets flag)
+map "key" ⩑                     # delete key
+
+# Nested access:
+data "users" · 0 · "name" ·     # data.users[0].name
+
+# Maps make JSON natural:
+json-str ⍎                      # parse JSON string → map/list structure
+data ⍕                          # format map/list → JSON string
+
+# Modules as maps:
+⟨
+  "trim" { 𜱪 / +$/ ⌕ 𜱪 ⌫ }
+  "wrap" { :t "\"" t "\"" ⧺ ⧺ }
+⟩ :s
+
+# Usage:
+s "trim" · @                    # get function from module, execute
+
+# ============================================================================
+# SCOPES & LOOKUP
+# ============================================================================
+
+# Scope chain:
+#   block → mark → buffer → global
+#
+# Block scope is created fresh by eval (@). Local bindings live here.
+# Lookup searches upward.
+
+# Local binding (: is a reader that consumes next char):
+:x                   # bind TOS to "x" in block scope
+
+# Explicit scope access (scopes are maps):
+"__buffer__" "foo" value ⩐    # set in buffer scope
+"__global__" "foo" value ⩐    # set in global scope
+"__buffer__" "foo" ·          # get from buffer scope
+
+# Lookup:
+f                    # search block → mark → buffer → global, then eval
+
+# Module namespacing: use maps
+⟨ "trim" {...} "wrap" {...} ⟩ :m
+m "trim" · @
+
+# ============================================================================
+# REGISTERS (TREES, NOT STACKS)
+# ============================================================================
+
+# Registers are trees with a cursor, not simple stacks.
+# Popped values aren't lost — they become branches.
+# Pushing after popping creates a sibling branch.
+
+"text" 'a ⍃          # push to register a (create child, move to it)
+'a ⍂                 # pop from register a (move to parent, child becomes branch)
+'a ⍁                 # unpop (move back to last child / restore branch)
+'a ⍈                 # switch to next sibling branch
+'a ⍇                 # switch to prev sibling branch
+'a ⍊                 # peek (no movement)
+
+# Example (register 'a):
+#   1 'a ⍃  2 'a ⍃  3 'a ⍃   →  [1, 2, 3]
+#   'a ⍂                     →  [1, 2]     (3 is saved as branch)
+#   4 'a ⍃                   →  [1, 2, 4]  (4 is sibling to 3)
+#   'a ⍂                     →  [1, 2]
+#   'a ⍁                     →  [1, 2, 4]  (back to last branch)
+#   'a ⍈                     →  [1, 2, 3]  (switch to other branch)
+
+# The main stack is the unnamed/default register.
+# Kill-ring behavior falls out naturally (it's just a register tree).
+
+# ============================================================================
+# KEYBINDINGS
+# ============================================================================
+
+# 🗺 defines key mappings (affects UI interpretation)
+
+'h '🠔 🗺              # h → move left
+'j '🠗 🗺              # j → move down
+'k '🠕 🗺              # k → move up
+'l '🠖 🗺              # l → move right
+
+'% '𜱪 🗺              # % → select all
+'s '⌹ 🗺              # s → split selection by regex
+
+# Keybindings stored in a mode map (normal, insert, etc.)
+
+# ============================================================================
+# SELECTIONS & RANGES
+# ============================================================================
+
+# Core editing model (Kakoune-inspired):
+#   Mark      = anchored position in a buffer (stays valid through edits)
+#   Range     = [start-mark, end-mark] — a span of text
+#   Selection = list of ranges — the "current selection" for editing ops
+#
+# Selections are values, not hidden state. Editing ops take selection as input.
+# Marks are values too — no "set mark" global state.
+#
+# Selection index: ⌗ returns current selection's index (0-based).
+# Useful for numbering, sequencing, or conditional logic per-selection.
+#
+# Scope inheritance: When narrowing/splitting a selection, children inherit
+# the parent's scope. This enables patterns like select-csv where row/col
+# metadata flows down to cell selections automatically.
+
+# ============================================================================
+# CONDITIONALS
+# ============================================================================
+
+# Unlike Kakoune, zero selections is valid.
+# Zero selections = "false" — subsequent selection-based ops become no-ops.
+# This enables conditional logic without explicit branching.
+
+# Comparisons push 1 (true) or 0 (false) onto the stack.
+# ? peeks condition and executes block if truthy; ! if falsy.
+# Condition is preserved (pushed back) after exec, enabling chaining.
+# Drop condition with ⊖ after a conditional chain.
+
+'a 'b =              # string equality → pushes 1 or 0
+5 3 >                # numeric compare → pushes 1 or 0
+
+1 1 = {do-this} ? ⊖             # if 1=1, execute block, drop condition
+a b = {if-true} ? {if-false} ! ⊖  # if-else pattern (condition preserved after each)
+x {fallback} ! ⊖                # unless pattern
+
+# ============================================================================
+# OVERLAYS
+# ============================================================================
+
+# Overlays are lists of marks associated with a buffer but not the current selection.
+# Use cases: syntax highlighting, error markers, search results, bookmarks.
+# Stored in buffer scope: buffer.overlays.errors, buffer.overlays.search, etc.
+# Applying marks from wrong buffer → empty selection (graceful failure).
+
+# ============================================================================
+# CODE EXECUTION
+# ============================================================================
+
+# Words are code bound to names. Quotations are anonymous code.
+# No closures, no capture — just dynamic lookup.
+
+# Defining words:
+{⤒} :g               # bind quotation to 'g' in local scope
+g                    # → goes to top (lookup g, find quotation, execute)
+
+# Execution rules:
+#   string     → no-op, push self (self-quoting)
+#   quotation  → interpret as code, execute
+#   number     → no-op, push self (self-quoting)
+#   list       → no-op, push self
+#   map        → no-op, push self
+
+# Strings are values; quotations are code:
+"hello" :g           # bind string to 'g'
+g                    # → "hello" on stack (string is self-quoting)
+{⤒} :g               # bind quotation to 'g'
+g                    # → goes to top of buffer (quotation executes)
+
+# Scope addressing:
+#   :x                      local (block scope)
+#   "__buffer__" "x" v ⩐    buffer scope (explicit)
+#   "__global__" "x" v ⩐    global scope (explicit)
+
+# Two eval variants:
+#   @              eval in fresh block scope (standard)
+#   "__eval__" @   eval in parent scope (library use, e.g., implementing :)
+
+# Grouping:
+#   (code)         execute immediately with fresh stack, push results to outer
+#   (1 2 +)        → 3 on outer stack
+#   5 (1 2 +)      → 5 3 (inner code can't touch the 5)
+
+# ============================================================================
+# INPUT STREAM
+# ============================================================================
+
+# "__input__" is a buffer containing the command stream.
+# Everything executed is already captured there — no special recording needed.
+#
+# Read primitives (from __input__):
+#   ⍞        read next char (raw)
+#   ⎕        read next syntactic unit (number, "string", {quotation}, (group), ⟨map⟩, or single char)
+#
+# In interactive mode: ⍞ waits for keystroke, ⎕ waits for complete syntactic unit.
+# In script mode: ⍞ consumes next char, ⎕ consumes next syntactic unit.
+# Same semantics, different input source — 1-1 correspondence preserved.
+#
+# Macros:
+#   Recording = mark start/end positions in __input__, copy that range
+#   Playback = insert saved content into __input__ (it executes as if typed)
+#   __input__ is a buffer, so normal buffer ops work on it.
+#
+# Minibuffer is just a buffer in the "__minibuffer__" register.
+# Reader functions can update it procedurally for UI feedback.
+
+# ============================================================================
+# READER FUNCTIONS (library-defined)
+# ============================================================================
+
+# Reader functions are just functions that read from __input__.
+# All delimiters (" { } ⟨ ⟩ [ ] etc.) are reader functions, not kernel ops.
+#
+#   {⍞} :'                               # char literal: read one char, push as string
+#   { ⎕ :c c c } :2                      # repeat: reads next unit, executes twice
+
+# ============================================================================
+# INSERT MODE
+# ============================================================================
+
+# Insert mode is just a reader function, not a special execution mode.
+#
+# Two variants with different terminators:
+#   i    terminates on \0 (null)  — for interactive use & recorded macros
+#   ✎    terminates on ✐          — for scripts (visible delimiter)
+#
+# Interactive: i enters insert mode, each keystroke inserts, <Esc> ends it.
+# Recorded macro: captures literal \0, plays back correctly with i.
+# Script: ✎hello world✐
+#
+# Both call "__insert__" with different terminator param.
+# Implementation sketch (library space):
+#   { :t { ⍞ :c  c t ≠ { c ⎗ } ? } ⍤ }  "__scope__" "__insert__" _ ⩐
+#   { '\0 "__scope__" "__insert__" · @ } :i
+#   { '✐ "__scope__" "__insert__" · @ } :✎
+#
+# No special "mode" machinery — just functions reading from input stream.
+
+# ============================================================================
+# UNDO MODEL
+# ============================================================================
+
+# Every buffer has an implicit .history register (a tree, like all registers).
+# Edits push to the history. Undo/redo navigate the tree.
+#
+# Library definitions (not primitives):
+#   { "__history__" ⍂ } :↶     # undo = pop from buffer's history tree
+#   { "__history__" ⍁ } :↷     # redo = unpop (restore branch)
+#   { "__history__" ⊳ } :⊳     # switch to sibling branch (alt timeline)
+#   { "__history__" ⊲ } :⊲     # switch to other sibling
+#
+# The tree structure gives us undo branches for free:
+#   - Edit after undo creates sibling branch
+#   - Navigate between branches with ⊳/⊲
+#   - Full undo tree like Emacs
+#
+# TOS preserved across undo (for carrying values across timelines):
+#   {try} $ :r ↶ r              # sandbox: do thing, grab result, undo, keep result
+#
+# "Undo buffer but not selection":
+#   :s ↶ s                      # save selection, undo, restore selection
+#
+# History is editable (it's a buffer):
+#   "__history__" @ ✎           # edit history directly, changes propagate
+#
+# --- Undo Grouping ---
+#
+# Runtime primitives (with sentinel for safety):
+#   "regname" sentinel ⚑        # checkpoint register with sentinel
+#   "regname" sentinel ⚐        # squash since checkpoint (sentinel must match)
+#
+# Mismatched sentinel = no-op or error. Prevents dangling checkpoint bugs.
+#
+# Library wrapper (user-facing):
+#   {expr} $                    # execute as single undo unit (generates sentinel internally)
+#
+# Users just write {block} $ — grouping internals are hidden.
+# Elaborate undo features (descriptions, annotations) are addon libraries.
+
+# ============================================================================
+# ERRORS
+# ============================================================================
+
+# Errors push to the __errors__ register (a stack like any other).
+# The error stack is exposed to the UI for visibility.
+# Scripts can inspect/clear errors programmatically.
+
+# ============================================================================
+# OPERATOR SYMBOLS (REFERENCE)
+# ============================================================================
+
+# --- Movement ---
+# 🠔 🠗 🠕 🠖   left/down/up/right (char)
+# ⇤ ⇥        beginning/end of line
+# ⤒ ⤓        top/bottom of buffer
+# ⇞ ⇟        page up/down
+# ⏮ ⏭        word backward/forward
+# ⇠ ⇢        prev/next match
+
+# --- Selection ---
+# 𜱪          select all
+# ⌹          split selection by regex
+# ⊏ ⊐        select inner/outer (textobjects)
+# ◇ ◆        expand/shrink selection
+# ⧏ ⧐        select to prev/next match
+# ⊆ ⊇        select inside/around pair
+
+# --- Stack ---
+# ⊂          collect N items to list
+# ⊃          spread list to stack
+# ⇅          swap top two
+# ⊖          drop top
+# ⊛          dup top
+# @          lookup & eval (fresh block scope)
+# :          local bind (reader: consumes next char as name)
+# ⌗          current selection index
+# ⊕          TBD (nice symbol, needs a home)
+
+# --- Registers (trees) ---
+# ⍃          push (create child, move to it)
+# ⍂          pop (move to parent, child becomes branch)
+# ⍁          unpop (move to last child / restore branch)
+# ⍈          next sibling branch
+# ⍇          prev sibling branch
+# ⍊          peek (no movement)
+
+# --- Arithmetic ---
+# + - × ÷    basic math (or * /)
+# ⌊ ⌈        floor/ceil
+# |          absolute value / modulo
+# ^          exponent
+
+# --- Comparison ---
+# = ≠        equal / not equal
+# < > ≤ ≥    numeric comparisons
+# ≡ ≢        deep equal / not deep equal
+
+# --- Logic ---
+# ∧ ∨ ¬      and / or / not
+# ⊤ ⊥        true / false literals
+
+# --- Conditionals/Control ---
+# ?          peek condition, execute if truthy (condition preserved)
+# !          peek condition, execute if falsy  (condition preserved)
+# ⍣          power: repeat N times
+# ⍤          while: do-while, body pushes condition, loop pops and checks
+# ⚠          raise error (push to __errors__)
+# ⊘          clear errors
+
+# --- Text Editing ---
+# ⌫ ⌦        delete backward/forward
+# ⎀          toggle insert/replace mode
+# ⏎          insert newline
+# ⇥ ⇤        indent/dedent
+
+# --- Clipboard/Kill ---
+# ✂          cut (delete + yank to "_" register)
+# ⎘          copy (yank to "_" register)
+# ⎗          paste (from "_" register)
+#            "_" is a tree register, so cycling through history works.
+
+# --- Search ---
+# ⌕          search forward (regex)
+# ⌖          search backward (regex)
+#
+# --- Filtering (predicate-based) ---
+# ⊜          keep selections where {pred} returns true
+# ⊝          reject selections where {pred} returns true
+#            For regex filtering, use: /pat/ ⌕ 𜱪
+
+# --- Undo/History (library-defined, built on register trees) ---
+# ↶          undo (pop buffer's history tree)
+# ↷          redo (unpop / restore branch)
+# ⊳ ⊲        switch undo branches (sibling navigation)
+#
+# --- Undo Grouping ---
+# ⚑          checkpoint (runtime: "regname" sentinel ⚑)
+# ⚐          squash (runtime: "regname" sentinel ⚐)
+# $          group block as single undo unit (library: {expr} $)
+
+# --- Buffer/File ---
+# ⊞          new buffer
+# ⊠          close buffer
+# ⊡          switch buffer
+# ⏏          save
+# ⎆          open file
+
+# --- Selections ---
+# (Selections are lists of ranges. Ranges are [start-mark, end-mark].
+#  No "current mark" concept — marks are values, not global state.)
+
+# --- Modes ---
+# i          insert mode, \0 terminator (interactive, recorded macros)
+# ✎ ... ✐    insert mode, ✐ terminator (scripts)
+# ◫          visual/select mode
+# (no explicit "normal mode" — it's just the default execution state)
+
+# --- String/Buffer ---
+# ⧺          concat / append
+# ⊗          split by delimiter
+# ‖          length
+# ⌿          slice
+# ⍉          transpose
+# ⍋ ⍒        sort asc/desc
+
+# --- List ---
+# ⊣ ⊢        head / tail (first / rest)
+# ⊲ ⊳        cons / snoc (prepend / append)
+# ⌽          reverse
+# ⍎ ⍕        parse / format (string↔value, including JSON)
+# ∊          member of
+# ⍳          index of
+# ⍴          reshape / dimensions
+
+# --- Map/List Lookup ---
+# ·          get (list N · OR map key ·) — unified lookup
+# ⩐          set (map key value ⩐)
+# ⩑          delete key (map key ⩑)
+# ('⊣ ¨ = keys, '⊢ ¨ = values)
+
+# --- Input Stream ---
+# ⍞          read next char (raw)
+# ⎕          read next syntactic unit (number, string, block, map, or char)
+
+# --- Misc ---
+# 🗺          define keybinding
+# ∅          empty/null
+# ⋯          repeat last
+# ⟳          replay macro
+# ⊙          apply / call
+# ¨          each (map)
+# ⌘          TBD (nice symbol, needs a home)
+
+# ============================================================================
+# MENU MACROS
+# ============================================================================
+
+# "Menu" macros look ahead one char and dispatch via map lookup.
+# Useful for namespacing/modules:
+#
+#   ⟨ 'g {⤒} 'd {"__goto_def__" @} 'e {⤓} ⟩ :m
+#   { ⍞ :c  m c · @ } :g            # read char, lookup in map, execute
+#
+# Usage:
+#   gg  →  go to top      (g reads 'g', looks up in map, executes {⤒})
+#   gd  →  go to definition
+#   ge  →  go to end
+#
+# This gives vim-style multi-key commands via library code.
+# Modules export a map; menu macro does the dispatch.
+#
+# Aliases might need to be a language feature for efficiency (TBD).
+
+# ============================================================================
+# ASYNC / PIPES (SKETCH)
+# ============================================================================
+
+# For LSP, shell integration, etc., we need async I/O.
+# Idea: A pipe/stream is a buffer where:
+#   - Reading past loaded content blocks until data arrives
+#   - Or: explicit async primitives (callbacks, promises, etc.)
+#
+# TBD: What's the right interface? Blocking buffer vs async primitives.
+
+# ============================================================================
+# CODE SAMPLES (EXPLORATORY)
+# ============================================================================
+
+# --- Interactive: select all TODOs, move to file ---
+# "myfile.rs" ⎆  /TODO/ ⌕ 𜱪  ✂  "todos.txt" ⎆  ⎗
+
+# --- Interactive: delete all lines containing "error" ---
+# 𜱪 /error/ ⊜ ⌫
+
+# --- Interactive: add "pub " before every "fn " ---
+# /fn / ⌕ 𜱪 ⇤ ✎pub ✐
+
+# --- Script: wrap selection in quotes ---
+# { ⎘ :t  "\"" t "\"" ⧺ ⧺  ⎗ } :w
+
+# --- Script: trim trailing whitespace ---
+# { 𜱪 / +$/ ⌕ 𜱪 ⌫ } :t
+
+# --- Menu macro: vim-style g namespace ---
+# ⟨ 'g {⤒} 'd {"__goto_def__" @} 'e {⤓} ⟩ :m
+# { ⍞ :c  m c · @ } :g            # read char, lookup in map, execute
+
+# ============================================================================
+# OBSERVATIONS FROM CODE SAMPLES
+# ============================================================================
+
+# Things that work well:
+#   - Menu macro pattern with maps for namespacing/modules
+#   - Select-then-act Kakoune style is concise
+#   - Selections as implicit iteration (ops apply to all)
+#   - ¨ only needed when per-selection logic varies
+#   - ⌗ (selection index) enables numbering, sequencing
+#   - :x for local binding is visually clear
+#
+# Patterns:
+#   - "Select, transform, paste": ⎘ → manipulate "__kill__" → ⎗
+#   - "Filter selections": {pred} ⊜ or {pred} ⊝
+#   - "Structured data": library words like select-csv set scope metadata
+#
+# Gaps still present:
+#   - String interpolation syntax (see sketch above)
+#   - Regex capture groups (⊙N after match?)
+#   - Case conversion (⌃ ⌄ for upper/lower?)
+
+
+# ============================================================================
+# ALIGNMENT (LIBRARY-DEFINED)
+# ============================================================================
+
+# ⫼ (or similar) — align selections on a pattern
+# Library-defined but important enough for a symbol:
+#
+#   /=/ ⫼              # align all = signs in selection
+#
+# Implementation finds max column position, pads each line.
+
+# ============================================================================
+# KERNEL vs LIBRARY
+# ============================================================================
+
+# KERNEL — must be implemented in host language (irreducible primitives)
+#
+# Format: symbol   stack-effect   [effects]
+#
+# Type aliases:
+#   "  string       1  number       ⟨  map        [  list
+#   {  quotation    !  mark         _  any        *  variadic
+#   a-z  generic (only when same var repeated, else use _)
+#
+# Effects: [b] buffer, [s] sel, [r] reg, [i] input, [io] file
+
+# Registers (tree structure) — stack is "__stack__", scope is "__scope__"
+#   ⍃              _ " →           [r]      # push to register
+#   ⍂              " → _           [r]      # pop (empty register → falsey/nil)
+#   ⍁              " →             [r]      # unpop (restore last popped branch)
+#   ⍀              " →             [r]      # clear (inverse of unpop, prunes branch)
+#   ⍈              " →             [r]      # next sibling branch
+#   ⍇              " →             [r]      # prev sibling branch
+#   ⍊              " → _                    # peek (no movement)
+# Eval — unscoped (uses __scope__ directly); @ in library wraps with fresh scope
+#   ⊛              _ → *           [*]      # eval: executes quotation, no-op on string/number/list/map
+
+# Conditionals — peek condition from stack, exec quotation, push condition back
+#   ?              { cond → cond *          # if truthy: exec quotation
+#   !              { cond → cond *          # if falsy: exec quotation
+#   (typical pattern: a 1 = {f} ? {g} ! ⊖ — condition preserved, drop after chain)
+
+# Comparison — = is deep equal; < > numeric; ⋖ ⋗ lexicographic
+#   =              _ _ → 1                  # deep equal (returns 1 or 0)
+#   <              1 1 → 1                  # numeric less
+#   >              1 1 → 1                  # numeric greater
+#   ⋖              " " → 1                  # lexicographic less
+#   ⋗              " " → 1                  # lexicographic greater
+
+# Arithmetic
+#   + - × ÷        1 1 → 1                  # basic math
+#   |              1 1 → 1                  # modulo
+#   ^              1 1 → 1                  # exponent
+#   ⌊ ⌈            1 → 1                    # floor / ceil
+
+# Sequence ops — strings, lists, maps
+#   ⧺              _ _ → _                  # concat (or map merge)
+#   ·              _ _ → _                  # index (num) or key lookup (any type)
+#   ‖              _ → 1                    # length
+#   ⌿              _ 1 1 → _                # slice [start, end) — not for maps
+#   ⩐              _ _ _ →                  # set at index/key (mutates)
+#   ⩑              _ _ →                    # delete at index/key (mutates)
+
+# Buffer — THE single buffer; no multiple buffers for now
+#   ⎗              " →             [b]      # insert text at selections
+#   ⌫              →               [b]      # delete at selections
+#   ⊙              1 → !                    # create mark at offset
+#   ⊚              ! ! → "                  # get text between marks
+#   ⌗              → 1                      # current selection index (0-based)
+#   ⊕              →               [s]      # ensure selection exists (init if none)
+#   ‖ᵇ             → 1                      # buffer length (chars)
+
+# Buffer movement (modify selection directly)
+#   🠔 🠖 🠕 🠗        →               [s]      # move cursor left/right/up/down
+#   ⇤ ⇥            →               [s]      # start/end of line
+#   ⤒ ⤓            →               [s]      # top/bottom of buffer
+
+# Buffer regex — returns marks, not strings
+#   ⌕              " → [!]                  # find pattern → list of mark pairs (ranges)
+#   ⌕̈              " " →           [b]      # replace pattern with string in buffer
+
+# File I/O
+#   ⎆              " → "           [io]     # read file contents to string
+#   ⏏              " " →           [io]     # write string to file (path, content)
+
+# Input
+#   ⍞              → "             [i]      # read next char from __input__
+
+# Undo — buffer changes auto-push to __history__; just use register ops
+#   (undo = "__history__" ⍂, redo = "__history__" ⍁, branches = ⍈ ⍇)
+#   ⚑              " →             [r]      # checkpoint: mark position for grouping
+#   ⚐              →               [r]      # squash: collapse since last checkpoint
+
+# Type
+#   ⧰              _ → 1                    # is number? (returns 1 or 0)
+
+# Construction — DS primitives
+#   ∅              → [                      # empty list (empty string = ∅ ⍙)
+#   ♯              " → {                    # sharpen: string → quotation (tag as code)
+#   ♭              { → "                    # flatten: quotation → string (strip code tag)
+#   0-9            → 1                      # push digit value (0 through 9)
+#   ⍘              " → [1]                  # string → list of codepoints
+#   ⍙              [1] → "                  # list of codepoints → string
+#   ⍚              [ → ⟨                    # list of pairs → map
+#   ⍛              ⟨ → [                    # map → list of pairs
+
+# ---
+
+# LIBRARY — definable in terms of kernel
+#
+# Types: " string, 1 number, ⟨ map, [ list, { quotation, ! mark, _ any, * variadic
+
+# --- Stack ops (stack = "__stack__" register) ---
+#   ⊛ (ctrl+d)     a → a a                     # dup: "__stack__" ⍊
+#   ⊖ (ctrl+k)     _ →                         # drop: "__stack__" ⍂ ⊖  (pop and discard)
+#   ⇅ (ctrl+t)     a b → b a                   # swap: via temp register
+
+# --- Binding (scope = "__scope__" register, a map) ---
+#   : (reader)     _ →                         # bind: reads name, sets in scope map
+#   @              _ → *           [*]         # scoped eval: push fresh scope, ⊛, pop
+
+# --- Char/token readers (all library-defined using ⍞ lookahead) ---
+#   ' (')          → "               [i]       # char literal: {⍞}
+#   ⎕              → _               [i]       # syntactic unit: parse from __input__
+#   " { } ⟨ ⟩ [ ] ( )                          # all delimiter readers are library-defined
+
+# --- Undo/redo (history = "__history__" register) ---
+#   ↶ (u)          →                 [b]       # undo: "__history__" ⍂
+#   ↷ (ctrl+r)     →                 [b]       # redo: "__history__" ⍁
+
+# --- Clipboard (kill = "__kill__" register) ---
+#   ✂ (x)          →                 [b r]     # cut: copy + delete
+#   ⎘ (y)          → "               [r]       # yank: selection text → __kill__
+#   p (p)          →                 [b]       # paste: __kill__ ⍊ ⎗ (interactive: if stack empty, use kill)
+#   P              →                 [b]       # paste before
+
+# --- Comparison (derived) ---
+#   ≠              _ _ → 1                     # not equal: = 1 ⇅ -
+#   ≤              1 1 → 1                     # lte: > 1 ⇅ -
+#   ≥              1 1 → 1                     # gte: < 1 ⇅ -
+
+# --- Logic (operate on values, not hidden flag) ---
+#   ∧              1 1 → 1                     # and
+#   ∨              1 1 → 1                     # or
+#   ¬              1 → 1                       # not
+
+# --- Iteration ---
+#   ⍣              { 1 → *                     # repeat N times
+#   ⍤              { → *                       # while: repeat while TOS truthy
+#   ¨              { [ → [                     # map: apply block to each element
+
+# --- List/sequence construction ---
+#   ⊂              * 1 → [                     # collect top N items into list
+#   ⊃              [ → *                       # spread list items onto stack
+#   [ ]            → [               [r]       # bracketed: [ pushes sentinel, ] collects
+#   ⊣ ⊢            [ → _  /  [ → [             # head / tail
+#   ⌽              [ → [                       # reverse
+#   ⍋ ⍒            [ → [                       # sort asc / desc
+#   ∊              _ [ → 1                     # member of (returns 1/0)
+#   ⍳              _ [ → 1                     # index of (-1 if not found)
+
+# --- String ---
+#   ⍎              " → _                       # parse JSON/literal → value
+#   ⍕              _ → "                       # format value → JSON/string
+#   ⍉              [ → [                       # transpose (list of lists)
+
+# --- Insert mode ---
+#   i (i)          →                 [b i]     # insert until \0 (interactive)
+#   ✎              →                 [b i]     # insert until ✐ (scripts)
+#   a o O          →                 [b i]     # append / open below / open above
+
+# --- Movement ---
+#   🠔🠖🠕🠗 (hjkl)    →                 [s]       # left/right/up/down
+#   ⤒ ⤓ (gg/G)     →                 [s]       # top/bottom of buffer
+#   ⇤ ⇥ (0/$)      →                 [s]       # start/end of line
+#   ⏮ ⏭ (b/w)      →                 [s]       # word backward/forward
+#   ⇞ ⇟ (^b/^f)    →                 [s]       # page up/down
+
+# --- Selection ---
+#   𜱪 (%)          →                 [s]       # select all
+#   ⌹ (s)          " →               [s]       # split by regex
+#   ◇ ◆            →                 [s]       # expand / shrink
+#   ⊏ ⊐            " →               [s]       # select inner / outer (textobject)
+
+# --- Search (library uses kernel regex) ---
+#   / (/)          " →               [s]       # search forward: split buffer by pattern
+#   n N            →                 [s]       # next / prev match
+
+# --- Filter ---
+#   ⊜              { →               [s]       # keep selections where block truthy
+#   ⊝              { →               [s]       # reject selections where block truthy
+
+# --- Buffer management (via registers) ---
+#   ⊞              → _                         # new buffer (push to __buffers__)
+#   ⊠              →                 [r]       # close buffer
+#   ⊡              " →               [b]       # switch to buffer by name
+
+# --- Error handling ---
+#   ⚠              " →               [r]       # raise: push to __errors__
+#   ⊘              →                 [r]       # clear errors
+
+# --- Undo grouping ---
+#   $              { → *             [r]       # execute as single undo unit
+
+# --- Keybinding ---
+#   🗺              " { →                       # bind key in mode map
+
+# --- Misc ---
+#   ⋯ (.)          → *               [*]       # repeat last command
+#   ∅              → [                         # empty list
+
+# ============================================================================
+# OPEN QUESTIONS
+# ============================================================================
+
+# - APL-style grouping operator syntax (####)
+# - Aliases as language feature?
+# - Async I/O model for LSP, pipes, etc.
+# - String interpolation syntax
+# - Regex capture group access (⊙0, ⊙1, ... after match?)
+# - Auto-coercion: numbers → strings when writing to buffer
+# - Find home for: ⌘ ⊕ (nice symbols without assignment)
+# - Restricting ⍞ for static analysis (declarative reader table idea — shelved)

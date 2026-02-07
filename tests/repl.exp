@@ -1,0 +1,26 @@
+#!/usr/bin/expect -f
+# REPL integration test
+
+spawn scripts/nib
+
+expect "nib>"
+send "3 5+\r"
+expect "8"
+
+expect "nib>"
+send "\"hello\"\r"
+expect "8 \"hello\""
+
+expect "nib>"
+send "⊖\r"
+expect "8"
+
+expect "nib>"
+send "\"world\"⎗\r"
+expect "8"
+
+expect "nib>"
+send "\x04"
+expect eof
+
+puts "\nPASS: repl"
