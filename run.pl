@@ -30,7 +30,8 @@ run(['-e', Expr | _], Prelude) :- !,
 	atom_string(Expr, Script),
 	initial_state(S0),
 	eval_string(Prelude, S0, S1),
-	eval_string(Script, S1, S),
+	compile_string(Script, S1, S2, Compiled),
+	eval_string(Compiled, S2, S),
 	buf_text(S, Output),
 	write(Output).
 
@@ -40,7 +41,8 @@ run([NibFile | _], Prelude) :- !,
 	read_string(current_input, _, Input),
 	initial_state_with_input(Input, S0),
 	eval_string(Prelude, S0, S1),
-	eval_string(Script, S1, S),
+	compile_string(Script, S1, S2, Compiled),
+	eval_string(Compiled, S2, S),
 	buf_text(S, Output),
 	write(Output).
 
@@ -55,7 +57,8 @@ run([], Prelude) :-
 	read_string(current_input, _, Script),
 	initial_state(S0),
 	eval_string(Prelude, S0, S1),
-	eval_string(Script, S1, S),
+	compile_string(Script, S1, S2, Compiled),
+	eval_string(Compiled, S2, S),
 	buf_text(S, Output),
 	write(Output).
 
@@ -65,7 +68,8 @@ repl(S0) :-
 	(   read_line_edit("nib> ", Syms, Line),
 	    Line \= end_of_file
 	->  catch(
-	        ( eval_string(Line, S0, S1),
+	        ( compile_string(Line, S0, SC, Compiled),
+	          eval_string(Compiled, SC, S1),
 	          ( is_halted(S1) -> true ; repl(S1) )
 	        ),
 	        Error,
@@ -116,10 +120,11 @@ kernel_chars([
 	"⍃", "⍂", "⍁", "⍀", "⍈", "⍇", "⍊",
 	"⧺", "‖", "⌿", "⊣", "⊢", "⌽",
 	"∅", "⍚", "⍛", "⧰", "⍕", "⍎", "⊗", "⍘", "⍙",
+	"⟦", "⟧",
 	"⊂", "⊃", "·", "⩐", "⩑", "⊜", "⊝", "⍋", "⍒", "∊", "⍳",
 	"⍣", "⍤", "¨",
 	"⎗", "⌫", "⌦", "🠔", "🠖", "⤒", "⤓", "⇤", "⇥", "🠕", "🠗", "⊚",
-	"⍞", "⏏",
+	"⍞", "⟐", "⏏",
 	"⎆", "⇪"
 ]).
 

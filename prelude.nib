@@ -239,3 +239,9 @@
 # String repeat: "s" n -> "sss..."
 {:n :s ""{s⧺}n⍣}:⍴
 "⍴""repeat string n times" D
+
+# Bracket list syntax: [ ... ] immediate words
+{"⟦"⎗};[
+{"⟧"⎗};]
+"[""start bracket list (push mark)" D
+"]""end bracket list (collect to mark)" D

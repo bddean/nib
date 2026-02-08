@@ -3,6 +3,7 @@
 	initial_state_with_input/2,
 	step/3,
 	eval_string/3,
+	compile_string/4,
 	stack_top/2,
 	stack_values/2,
 	buf_text/2,
@@ -26,6 +27,102 @@ eval_string(String, S0, S) :-
 	string_chars(String, Chars),
 	foldl(step, Chars, S0, S1),
 	flush_mode(S1, S).
+
+%% compile_string(+String, +State0, -State, -Compiled)
+%% Two-phase compile: walks input expanding immediate words, passes rest through.
+%% Immediate word bodies execute at compile time with buffer as emit stream
+%% and __cin__ register as input stream.
+%%
+%% TODO: For concurrent compile+run, use SWI-Prolog message queues:
+%%   - Compile thread: walks input, sends compiled chars to queue
+%%   - Run thread: reads from queue, executes chars as they arrive
+%%   - thread_create(compile_producer(Input, State, Queue), ...)
+%%   - run_consumer(Queue, State) reads with thread_get_message
+%%   - This allows run to start before compile finishes
+compile_string(String, S0, S, Compiled) :-
+	string_chars(String, Chars),
+	compile_chars(normal, Chars, S0, S, OutChars),
+	string_chars(Compiled, OutChars).
+
+%% compile_chars(+Mode, +Chars, +State0, -State, -OutChars)
+%% Mode tracks literal context to avoid expanding inside strings/quotes/etc.
+
+compile_chars(_, [], S, S, []).
+
+% Normal mode
+compile_chars(normal, [C|Cs], S0, S, Out) :-
+	( C = '"' -> Out = ['"'|Out1], compile_chars(string, Cs, S0, S, Out1)
+	; C = '{' -> Out = ['{'|Out1], compile_chars(quote(0), Cs, S0, S, Out1)
+	; C = '#' -> Out = ['#'|Out1], compile_chars(comment, Cs, S0, S, Out1)
+	; C = '\'' -> Out = ['\''|Out1], compile_chars(char, Cs, S0, S, Out1)
+	; C = ':' -> Out = [':'|Out1], compile_chars(bind, Cs, S0, S, Out1)
+	; C = ';' -> Out = [';'|Out1], compile_chars(bind, Cs, S0, S, Out1)
+	; scope_lookup(C, S0, imm(quot(Body))) ->
+		exec_immediate(Body, Cs, S0, S1, Cs1, EmittedChars),
+		append(EmittedChars, Out1, Out),
+		compile_chars(normal, Cs1, S1, S, Out1)
+	; Out = [C|Out1], compile_chars(normal, Cs, S0, S, Out1)
+	).
+
+% Inside string literal: pass through until closing "
+compile_chars(string, ['"'|Cs], S0, S, ['"'|Out]) :- !,
+	compile_chars(normal, Cs, S0, S, Out).
+compile_chars(string, [C|Cs], S0, S, [C|Out]) :-
+	compile_chars(string, Cs, S0, S, Out).
+
+% Inside quote: track brace nesting
+compile_chars(quote(0), ['}'|Cs], S0, S, ['}'|Out]) :- !,
+	compile_chars(normal, Cs, S0, S, Out).
+compile_chars(quote(D), ['{'|Cs], S0, S, ['{'|Out]) :- !,
+	D1 is D+1, compile_chars(quote(D1), Cs, S0, S, Out).
+compile_chars(quote(D), ['}'|Cs], S0, S, ['}'|Out]) :-
+	D > 0, !, D1 is D-1, compile_chars(quote(D1), Cs, S0, S, Out).
+compile_chars(quote(D), [C|Cs], S0, S, [C|Out]) :-
+	compile_chars(quote(D), Cs, S0, S, Out).
+
+% Inside comment: pass through until newline
+compile_chars(comment, ['\n'|Cs], S0, S, ['\n'|Out]) :- !,
+	compile_chars(normal, Cs, S0, S, Out).
+compile_chars(comment, [C|Cs], S0, S, [C|Out]) :-
+	compile_chars(comment, Cs, S0, S, Out).
+
+% After ': pass through one char then back to normal
+compile_chars(char, [C|Cs], S0, S, [C|Out]) :-
+	compile_chars(normal, Cs, S0, S, Out).
+compile_chars(char, [], S, S, []).
+
+% After : or ; — pass through one char (the name)
+compile_chars(bind, [C|Cs], S0, S, [C|Out]) :-
+	compile_chars(normal, Cs, S0, S, Out).
+compile_chars(bind, [], S, S, []).
+
+%% exec_immediate(+Body, +InChars, +State0, -State, -RestChars, -EmittedChars)
+%% Execute an immediate word body with buffer as emit stream and __cin__ as input.
+exec_immediate(Body, InChars, S0, S, RestChars, EmittedChars) :-
+	S0 = state(Buf0, St, Sc, Regs0, _Mode),
+	% Store remaining input in __cin__ register
+	string_chars(InStr, InChars),
+	( get_assoc('__cin__', Regs0, OldCin) -> true ; OldCin = none ),
+	rtree_empty(CinRT0), rtree_push(str(InStr), CinRT0, CinRT),
+	put_assoc('__cin__', Regs0, CinRT, Regs1),
+	% Empty buffer for emit output
+	TmpS = state(buf([],[]), St, Sc, Regs1, normal),
+	% Execute body
+	eval_quot(Body, TmpS, TmpS1),
+	% Extract emit output from buffer
+	buf_text(TmpS1, EmitStr),
+	string_chars(EmitStr, EmittedChars),
+	% Extract remaining input from __cin__
+	TmpS1 = state(_, St1, Sc1, Regs2, _),
+	get_assoc('__cin__', Regs2, CinRT1),
+	rtree_peek(CinRT1, str(RestStr)),
+	string_chars(RestStr, RestChars),
+	% Restore original buffer; keep rest of state changes
+	( OldCin = none
+	-> Regs3 = Regs2   % leave __cin__ (harmless)
+	;  put_assoc('__cin__', Regs2, OldCin, Regs3)
+	),
+	S = state(Buf0, St1, Sc1, Regs3, normal).
 
 stack_top(state(_,St,_,_,_), V) :- rtree_peek(St, V).
 stack_values(state(_,St,_,_,_), Vs) :- rtree_values(St, Vs).
@@ -74,6 +171,8 @@ step_mode(read_char, Char, S0, S) :-
 	atom_string(Char, Str), stack_push(str(Str), S0, S1), set_mode(normal, S1, S).
 step_mode(read_bind, Char, S0, S) :-
 	stack_pop(V, S0, S1), scope_bind(Char, V, S1, S2), set_mode(normal, S2, S).
+step_mode(read_bind_imm, Char, S0, S) :-
+	stack_pop(V, S0, S1), scope_bind(Char, imm(V), S1, S2), set_mode(normal, S2, S).
 
 %%%% --- Normal dispatch ---
 
@@ -86,6 +185,7 @@ step_normal('"', S0, S) :- !, set_mode(read_string([]), S0, S).
 step_normal('{', S0, S) :- !, set_mode(read_quote([],0), S0, S).
 step_normal('\'', S0, S) :- !, set_mode(read_char, S0, S).
 step_normal(':', S0, S) :- !, set_mode(read_bind, S0, S).
+step_normal(';', S0, S) :- !, set_mode(read_bind_imm, S0, S).
 step_normal(C, S0, S) :- kernel_op(C, S0, S), !.
 step_normal(C, S0, S) :- scope_lookup(C, S0, V), !, scoped_eval(V, S0, S).
 step_normal(C, _, _) :-
@@ -203,6 +303,10 @@ kernel_op('⍙') -->
 	stack_pop(list(Nums)), { maplist(unwrap_num, Nums, Codes), string_codes(S, Codes) },
 	stack_push(str(S)).
 
+%%% Marks (used by bracket list syntax)
+kernel_op('⟦') --> stack_push(mark(0)).
+kernel_op('⟧') --> collect_to_mark([], List), stack_push(list(List)).
+
 %%% List ops
 kernel_op('⊂') -->
 	stack_pop(num(N)), collect_n(N, Rev),
@@ -256,7 +360,26 @@ kernel_op('🠗') --> buf_down.
 kernel_op('⊚', S0, S) :- buf_text(S0, T), stack_push(str(T), S0, S).
 
 %%% Input / Halt
-%%kernel_op('⍞') --> set_mode(read_char).
+%% ⍞ compile-read: consume one char from __cin__ register
+kernel_op('⍞') -->
+	get_reg('__cin__', RT0),
+	{ rtree_pop(RT0, str(S), RT1),
+	  string_chars(S, [C|Rest]),
+	  atom_string(C, CS),
+	  string_chars(RestS, Rest),
+	  rtree_push(str(RestS), RT1, RT2) },
+	set_reg('__cin__', RT2),
+	stack_push(str(CS)).
+
+%% ⟐ expand: pop string, compile one form from it + __cin__, emit to buffer
+kernel_op('⟐') -->
+	stack_pop(str(Code)),
+	get_reg('__cin__', RT0),
+	{ rtree_pop(RT0, str(InS), RT1),
+	  string_concat(Code, InS, Combined),
+	  string_chars(Combined, CombinedCs) },
+	compile_one_form(CombinedCs, RT1).
+
 kernel_op('⏏') --> set_mode(halted).
 
 %%% File I/O
@@ -333,11 +456,31 @@ chain_lookup(N, [_|Rest], V) :- chain_lookup(N, Rest, V).
 
 %%% Eval
 
+scoped_eval(imm(quot(Body))) --> !, eval_imm_body(Body).
+scoped_eval(imm(V)) --> !, scoped_eval(V).   % non-quot imm: unwrap
 scoped_eval(quot(Code)) --> !, push_scope, eval_quot(Code), pop_scope.
 scoped_eval(V) --> stack_push(V).
 
+%% eval_imm_body(+Body, S0, S)
+%% Evaluate an immediate word body at runtime (e.g., inside a quotation).
+%% The body emits code to buffer, then we eval that emitted code.
+eval_imm_body(Body, S0, S) :-
+	S0 = state(Buf0, St, Sc, Regs, Mode),
+	% Save buffer, use empty buffer for emit
+	TmpS = state(buf([],[]), St, Sc, Regs, normal),
+	% Execute body (emits to buffer)
+	eval_quot(Body, TmpS, TmpS1),
+	% Extract emitted code
+	buf_text(TmpS1, EmittedCode),
+	% Restore buffer, keep rest of state
+	TmpS1 = state(_, St1, Sc1, Regs1, _),
+	S1 = state(Buf0, St1, Sc1, Regs1, Mode),
+	% Now eval the emitted code in current scope
+	eval_string(EmittedCode, S1, S).
+
+eval_value(imm(V)) --> !, eval_value(V).   % unwrap immediate at runtime
 eval_value(quot(Code)) --> eval_quot(Code).
-eval_value(V) --> { V \= quot(_) }, stack_push(V).
+eval_value(V) --> { V \= quot(_), V \= imm(_) }, stack_push(V).
 
 eval_quot(Code) -->
 	{ string_chars(Code, Chars) },
@@ -346,6 +489,100 @@ eval_quot(Code) -->
 
 push_scope(state(B,St,Sc,R,M), state(B,St,[scope{}|Sc],R,M)).
 pop_scope(state(B,St,[_|Sc],R,M), state(B,St,Sc,R,M)).
+
+%%% Compile helpers
+
+%% compile_one_form(+Chars, +CinRT1, State0, State)
+%% Processes one complete form from Chars, emits to buffer, updates __cin__.
+%% CinRT1 is the cin register tree after popping the old value.
+compile_one_form([], RT1, S0, S) :- !,
+	rtree_push(str(""), RT1, RT2), set_reg('__cin__', RT2, S0, S).
+compile_one_form([C|Cs], RT1, S0, S) :-
+	( C = '"' ->
+		collect_string_lit(Cs, StrCs, Rest),
+		append(['"'|StrCs], [], Emit),
+		string_chars(EmitStr, Emit),
+		buf_insert(EmitStr, S0, S1),
+		string_chars(RestS, Rest),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S1, S)
+	; C = '{' ->
+		collect_quote_lit(Cs, 0, QCs, Rest),
+		append(['{'|QCs], [], Emit),
+		string_chars(EmitStr, Emit),
+		buf_insert(EmitStr, S0, S1),
+		string_chars(RestS, Rest),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S1, S)
+	; C = '#' ->
+		collect_comment_lit(Cs, CCs, Rest),
+		append(['#'|CCs], [], Emit),
+		string_chars(EmitStr, Emit),
+		buf_insert(EmitStr, S0, S1),
+		string_chars(RestS, Rest),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S1, S)
+	; C = '\'' ->
+		( Cs = [C2|Rest] -> Emit = ['\'', C2] ; Emit = ['\''], Rest = [] ),
+		string_chars(EmitStr, Emit),
+		buf_insert(EmitStr, S0, S1),
+		string_chars(RestS, Rest),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S1, S)
+	; C = ':' ->
+		( Cs = [C2|Rest] -> Emit = [':', C2] ; Emit = [':'], Rest = [] ),
+		string_chars(EmitStr, Emit),
+		buf_insert(EmitStr, S0, S1),
+		string_chars(RestS, Rest),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S1, S)
+	; C = ';' ->
+		( Cs = [C2|Rest] -> Emit = [';', C2] ; Emit = [';'], Rest = [] ),
+		string_chars(EmitStr, Emit),
+		buf_insert(EmitStr, S0, S1),
+		string_chars(RestS, Rest),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S1, S)
+	; digit_char(C, _) ->
+		collect_digits(Cs, DigCs, Rest),
+		string_chars(EmitStr, [C|DigCs]),
+		buf_insert(EmitStr, S0, S1),
+		string_chars(RestS, Rest),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S1, S)
+	; scope_lookup(C, S0, imm(quot(Body))) ->
+		string_chars(RestS, Cs),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S0, S1),
+		exec_immediate(Body, S1, S)
+	; % Regular char: emit it
+		atom_string(C, CS),
+		buf_insert(CS, S0, S1),
+		string_chars(RestS, Cs),
+		rtree_push(str(RestS), RT1, RT2),
+		set_reg('__cin__', RT2, S1, S)
+	).
+
+%% Literal collectors for compile_one_form
+collect_string_lit([], [], []).
+collect_string_lit(['"'|Cs], ['"'], Cs) :- !.
+collect_string_lit([C|Cs], [C|Rest], Rem) :- collect_string_lit(Cs, Rest, Rem).
+
+collect_quote_lit([], _, [], []).
+collect_quote_lit(['}'|Cs], 0, ['}'], Cs) :- !.
+collect_quote_lit(['{'|Cs], D, ['{'|Rest], Rem) :- !,
+	D1 is D+1, collect_quote_lit(Cs, D1, Rest, Rem).
+collect_quote_lit(['}'|Cs], D, ['}'|Rest], Rem) :-
+	D > 0, !, D1 is D-1, collect_quote_lit(Cs, D1, Rest, Rem).
+collect_quote_lit([C|Cs], D, [C|Rest], Rem) :- collect_quote_lit(Cs, D, Rest, Rem).
+
+collect_comment_lit([], [], []).
+collect_comment_lit(['\n'|Cs], ['\n'], Cs) :- !.
+collect_comment_lit([C|Cs], [C|Rest], Rem) :- collect_comment_lit(Cs, Rest, Rem).
+
+collect_digits([], [], []).
+collect_digits([C|Cs], [C|Rest], Rem) :- digit_char(C, _), !, collect_digits(Cs, Rest, Rem).
+collect_digits(Cs, [], Cs).
 
 %%% Sequence helpers
 
@@ -417,6 +654,9 @@ collect_n(N, [V|Vs]) --> { N > 0, N1 is N-1 }, stack_pop(V), collect_n(N1, Vs).
 
 spread_list([]) --> [].
 spread_list([X|Xs]) --> stack_push(X), spread_list(Xs).
+
+collect_to_mark(Acc, Acc) --> stack_pop(mark(_)), !.
+collect_to_mark(Acc, List) --> stack_pop(V), collect_to_mark([V|Acc], List).
 
 %%% Collection lookup/set
 
