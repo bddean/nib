@@ -57,15 +57,18 @@ initial_scope(Scope) :-
 	findall(K-prim(K), kernel_op_name(K, _), Pairs),
 	dict_pairs(Scope, scope, Pairs).
 
-%% --- 9 kernel ops ---
+%% --- stack ---
 
 '~', dup     ==>  [X]    ⊸ [X, X].
 '⇅', swap    ==>  [A, B] ⊸ [B, A].
 '⊖', drop    ==>  [_]    ⊸ [].
-'♯', sharpen ==>  [X]    ⊸ [q(X)].
-'⧺', concat  ==>  [B, A] ⊸ [C],  {vcat(A, B, C)}.
-'=', eq      ==>  [B, A] ⊸ [R],  {(A == B -> R = 1; R = 0)}.
+
+%% --- eval ---
+
 '⊛', eval    ==>  [X]    ⊸ [],   exec(X).
+
+%% --- continuation ---
+
 '⟰', cont_get ==>  cont_get.
 '⟱', cont_set ==>  cont_set.
 
@@ -82,6 +85,7 @@ initial_scope(Scope) :-
 
 %% --- comparison ---
 
+'=', eq       ==>  [B, A] ⊸ [R],  {(A == B -> R = 1; R = 0)}.
 '<', lt       ==>  [B, A] ⊸ [R],  {(A < B -> R = 1; R = 0)}.
 '>', gt       ==>  [B, A] ⊸ [R],  {(A > B -> R = 1; R = 0)}.
 '⋖', lt_lex   ==>  [B, A] ⊸ [R],  {(A @< B -> R = 1; R = 0)}.
@@ -89,6 +93,7 @@ initial_scope(Scope) :-
 
 %% --- sequence ---
 
+'⧺', concat   ==>  [B, A] ⊸ [C],  {vcat(A, B, C)}.
 '·', index    ==>  [K, Coll] ⊸ [V],  {vindex(Coll, K, V)}.
 '‖', length   ==>  [A] ⊸ [N],        {vlength(A, N)}.
 '⌿', slice    ==>  [E, S, A] ⊸ [R],  {vslice(A, S, E, R)}.
@@ -100,6 +105,7 @@ initial_scope(Scope) :-
 %% --- construction ---
 
 '∅', empty    ==>  [] ⊸ [[]].
+'♯', sharpen  ==>  [X]    ⊸ [q(X)].
 '♭', flatten  ==>  [q(X)] ⊸ [X].
 '⍘', to_cp    ==>  [A] ⊸ [Cs],  {atom_codes(A, Cs)}.
 '⍙', from_cp  ==>  [Cs] ⊸ [A],  {atom_codes(A, Cs)}.
