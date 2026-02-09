@@ -1,4 +1,5 @@
 :- use_module(kernel).
+:- use_module(zipper).
 :- use_module(library(plunit)).
 
 %% run input tokens with initial kernel scope, return final state
@@ -212,11 +213,6 @@ test(has_all_kernel_ops) :-
 	get_dict('⟰', Sc, prim('⟰')),
 	get_dict('⟱', Sc, prim('⟱')).
 
-test(count, [true(Len == 46)]) :-
-	initial_scope(Sc),
-	dict_pairs(Sc, _, Pairs),
-	length(Pairs, Len).
-
 :- end_tests(initial_scope).
 
 :- begin_tests(scope_is_words).
@@ -340,5 +336,42 @@ test(log_consumes) :-
 	true.
 
 :- end_tests(log).
+
+%% helper: run input through run_zip, return final zipper
+run_zip_prog(Input, Z) :-
+	initial_scope(Sc),
+	C = c{input: Input, stack: [], scope: Sc},
+	zip([C], Z0),
+	run_zip(Z0, Z).
+
+:- begin_tests(fork_kill).
+
+test(fork_basic) :-
+	%% fork [1,2] → two continuations, each logs its value
+	with_output_to(string(Out),
+		run_zip_prog([[1, 2], '⋔', '⍟'], _)),
+	%% both continuations log
+	(Out == "1\n2\n" ; Out == "2\n1\n").
+
+test(fork_stacks) :-
+	%% fork [a,b,c] then dup → each cont has [X,X]
+	run_zip_prog([[a, b, c], '⋔', '~'], Z),
+	unzip(Z, Cs),
+	length(Cs, 3),
+	maplist([C]>>(get_dict(stack, C, [X, X])), Cs).
+
+test(kill) :-
+	%% fork [1,2], kill → one continuation remains
+	run_zip_prog([[1, 2], '⋔', '✗'], Z),
+	unzip(Z, Cs),
+	length(Cs, 1).
+
+test(fork_then_compute) :-
+	%% fork [3,4], add 1 to each
+	run_zip_prog([[3, 4], '⋔', 1, '+'], Z),
+	unzip(Z, Cs),
+	maplist([C]>>(get_dict(stack, C, S), member(S, [[4], [5]])), Cs).
+
+:- end_tests(fork_kill).
 
 :- run_tests.

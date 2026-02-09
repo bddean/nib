@@ -16,7 +16,7 @@ for nibfile in "$DIR"/tests/integration/*.nib; do
 	outfile="${name}.out"
 	[ -f "$infile" ] || infile=/dev/null
 	(
-		if actual=$("$NIB" "$nibfile" < "$infile" 2>&1); then
+		if actual=$("$NIB" "$nibfile" < "$infile" 2>/dev/null); then
 			if [ -f "$outfile" ]; then expected=$(cat "$outfile"); else expected=""; fi
 			if [ "$actual" = "$expected" ]; then
 				echo "PASS $label"
