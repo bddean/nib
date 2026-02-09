@@ -194,7 +194,7 @@ test(has_all_kernel_ops) :-
 	get_dict('⟰', Sc, prim('⟰')),
 	get_dict('⟱', Sc, prim('⟱')).
 
-test(count, [true(Len == 9)]) :-
+test(count, [true(Len == 43)]) :-
 	initial_scope(Sc),
 	dict_pairs(Sc, _, Pairs),
 	length(Pairs, Len).
@@ -214,5 +214,87 @@ test(define_then_call) :-
 	S.stack == [y, x].
 
 :- end_tests(scope_is_words).
+
+:- begin_tests(arithmetic).
+
+test(add) :- run_stack([3, 4, '+'], [7]).
+test(sub) :- run_stack([10, 3, '-'], [7]).
+test(mul) :- run_stack([3, 4, '×'], [12]).
+test(div) :- run_stack([10, 2, '÷'], [5]).
+test(mod) :- run_stack([10, 3, '|'], [1]).
+test(pow) :- run_stack([2, 8, '^'], [256]).
+test(floor) :- run_stack([3.7, '⌊'], [3]).
+test(ceil) :- run_stack([3.2, '⌈'], [4]).
+
+:- end_tests(arithmetic).
+
+:- begin_tests(comparison).
+
+test(lt_true) :- run_stack([1, 2, '<'], [1]).
+test(lt_false) :- run_stack([2, 1, '<'], [0]).
+test(gt_true) :- run_stack([3, 1, '>'], [1]).
+test(gt_false) :- run_stack([1, 3, '>'], [0]).
+test(lt_lex) :- run_stack([abc, def, '⋖'], [1]).
+test(gt_lex) :- run_stack([def, abc, '⋗'], [1]).
+
+:- end_tests(comparison).
+
+:- begin_tests(sequence).
+
+test(index_list) :- run_stack([[a, b, c], 1, '·'], [b]).
+test(index_string) :- run_stack([hello, 0, '·'], [h]).
+test(length_list) :- run_stack([[a, b, c], '‖'], [3]).
+test(length_string) :- run_stack([hello, '‖'], [5]).
+test(length_empty) :- run_stack([[], '‖'], [0]).
+test(slice_list) :- run_stack([[a, b, c, d], 1, 3, '⌿'], [[b, c]]).
+test(slice_string) :- run_stack([hello, 1, 3, '⌿'], [el]).
+test(set_list) :- run_stack([[a, b, c], 1, z, '⩐'], [[a, z, c]]).
+test(del_list) :- run_stack([[a, b, c], 1, '⩑'], [[a, c]]).
+test(index_map) :-
+	run_prog([[a, 1, b, 2], '⍚', a, '·'], S),
+	S.stack == [1].
+test(set_map) :-
+	run_prog([[a, 1], '⍚', a, 99, '⩐', a, '·'], S),
+	S.stack == [99].
+test(del_map) :-
+	run_prog([[a, 1, b, 2], '⍚', a, '⩑', '⍛'], S),
+	S.stack == [[b, 2]].
+test(length_map) :-
+	run_prog([[a, 1, b, 2], '⍚', '‖'], S),
+	S.stack == [2].
+
+:- end_tests(sequence).
+
+:- begin_tests(construction).
+
+test(empty_list) :- run_stack(['∅'], [[]]).
+test(sharpen) :- run_stack([hello, '♯'], [q(hello)]).
+test(flatten) :- run_stack([q(hello), '♭'], [hello]).
+test(to_codepoints) :- run_stack([hi, '⍘'], [[104, 105]]).
+test(from_codepoints) :- run_stack([[104, 105], '⍙'], [hi]).
+test(to_map) :- run_prog([[a, 1, b, 2], '⍚'], S),
+	S.stack = [M], is_dict(M), get_dict(a, M, 1), get_dict(b, M, 2).
+test(from_map) :- run_prog([[a, 1, b, 2], '⍚', '⍛'], S),
+	S.stack = [L], is_list(L),
+	length(L, 4). %% [a, 1, b, 2] in some order
+
+:- end_tests(construction).
+
+:- begin_tests(digits).
+
+test(single_digit) :- run_stack(['3'], [3]).
+test(all_digits) :-
+	run_stack(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+		[9, 8, 7, 6, 5, 4, 3, 2, 1, 0]).
+
+:- end_tests(digits).
+
+:- begin_tests(type_check).
+
+test(is_num_yes) :- run_stack([42, '⧰'], [1]).
+test(is_num_no) :- run_stack([hello, '⧰'], [0]).
+test(is_num_list) :- run_stack([[1], '⧰'], [0]).
+
+:- end_tests(type_check).
 
 :- run_tests.

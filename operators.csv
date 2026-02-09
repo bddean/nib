@@ -1,0 +1,132 @@
+Symbol,Stack Effect        ,Effects,Description                                             ,Layer
+⍃     ,_ " →               ,[r]   ,push to register                                        ,kernel
+⍂     ," → _"              ,[r]   ,pop (empty register → falsey/nil)                       ,kernel
+⍁     ," →"                ,[r]   ,unpop (restore last popped branch)                      ,kernel
+⍀     ," →"                ,[r]   ,clear (inverse of unpop prunes branch)                  ,kernel
+⍈     ," →"                ,[r]   ,next sibling branch                                     ,kernel
+⍇     ," →"                ,[r]   ,prev sibling branch                                     ,kernel
+⍊     ," → _"              ,      ,peek (no movement)                                      ,kernel
+⊛     ,_ → *               ,[*]   ,eval: executes quotation no-op on string/number/list/map,kernel
+?     ,{ cond → cond *     ,      ,if truthy: exec quotation                               ,kernel
+!     ,{ cond → cond *     ,      ,if falsy: exec quotation                                ,kernel
+=     ,_ _ → 1             ,      ,deep equal (returns 1 or 0)                             ,kernel
+<     ,1 1 → 1             ,      ,numeric less                                            ,kernel
+>     ,1 1 → 1             ,      ,numeric greater                                         ,kernel
+⋖     ," "" → 1"           ,      ,lexicographic less                                      ,kernel
+⋗     ," "" → 1"           ,      ,lexicographic greater                                   ,kernel
++     ,1 1 → 1             ,      ,basic math: add                                         ,kernel
+-     ,1 1 → 1             ,      ,basic math: subtract                                    ,kernel
+×     ,1 1 → 1             ,      ,basic math: multiply                                    ,kernel
+÷     ,1 1 → 1             ,      ,basic math: divide                                      ,kernel
+|     ,1 1 → 1             ,      ,modulo                                                  ,kernel
+^     ,1 1 → 1             ,      ,exponent                                                ,kernel
+⌊     ,1 → 1               ,      ,floor                                                   ,kernel
+⌈     ,1 → 1               ,      ,ceil                                                    ,kernel
+⧺     ,_ _ → _             ,      ,concat (or map merge)                                   ,kernel
+·     ,_ _ → _             ,      ,index (num) or key lookup (any type)                    ,kernel
+‖     ,_ → 1               ,      ,length                                                  ,kernel
+⌿     ,_ 1 1 → _           ,      ,slice [start end) - not for maps                        ,kernel
+⩐     ,_ _ _ →             ,      ,set at index/key (mutates)                              ,kernel
+⩑     ,_ _ →               ,      ,delete at index/key (mutates)                           ,kernel
+⎗     ," →"                ,[b]   ,insert text at selections                               ,kernel
+⌫     ,→                   ,[b]   ,delete at selections                                    ,kernel
+⊙     ,1 → !               ,      ,create mark at offset                                   ,kernel
+⊚     ,! ! → "             ,      ,get text between marks                                  ,kernel
+⌗     ,→ 1                 ,      ,current selection index (0-based)                       ,kernel
+⊕     ,→                   ,[s]   ,ensure selection exists (init if none)                  ,kernel
+‖ᵇ    ,→ 1                 ,      ,buffer length (chars)                                   ,kernel
+🠔     ,→                   ,[s]   ,move cursor left                                        ,kernel
+🠖     ,→                   ,[s]   ,move cursor right                                       ,kernel
+🠕     ,→                   ,[s]   ,move cursor up                                          ,kernel
+🠗     ,→                   ,[s]   ,move cursor down                                        ,kernel
+⇤     ,→                   ,[s]   ,start of line                                           ,kernel
+⇥     ,→                   ,[s]   ,end of line                                             ,kernel
+⤒     ,→                   ,[s]   ,top of buffer                                           ,kernel
+⤓     ,→                   ,[s]   ,bottom of buffer                                        ,kernel
+⌕     ," → [!]"            ,      ,find pattern → list of mark pairs (ranges)              ,kernel
+⌕̈     ," "" →"             ,[b]   ,replace pattern with string in buffer                   ,kernel
+⎆     ," → ""              ,[io]  ,read file contents to string                            ,kernel
+⏏     ," "" →"             ,[io]  ,write string to file (path content)                     ,kernel
+⍞     ,→ "                 ,[i]   ,read next char from __input__                           ,kernel
+⚑     ," →"                ,[r]   ,checkpoint: mark position for grouping                  ,kernel
+⚐     ,→                   ,[r]   ,squash: collapse since last checkpoint                  ,kernel
+⧰     ,_ → 1               ,      ,is number? (returns 1 or 0)                             ,kernel
+∅     ,→ [                 ,      ,empty list                                              ,kernel
+♯     ," → {"              ,      ,sharpen: string → quotation (tag as code)               ,kernel
+♭     ,{ → "               ,      ,flatten: quotation → string (strip code tag)            ,kernel
+0     ,→ 1                 ,      ,push digit value 0                                      ,kernel
+1     ,→ 1                 ,      ,push digit value 1                                      ,kernel
+2     ,→ 1                 ,      ,push digit value 2                                      ,kernel
+3     ,→ 1                 ,      ,push digit value 3                                      ,kernel
+4     ,→ 1                 ,      ,push digit value 4                                      ,kernel
+5     ,→ 1                 ,      ,push digit value 5                                      ,kernel
+6     ,→ 1                 ,      ,push digit value 6                                      ,kernel
+7     ,→ 1                 ,      ,push digit value 7                                      ,kernel
+8     ,→ 1                 ,      ,push digit value 8                                      ,kernel
+9     ,→ 1                 ,      ,push digit value 9                                      ,kernel
+⍘     ," → [1]"            ,      ,string → list of codepoints                             ,kernel
+⍙     ,[1] → "             ,      ,list of codepoints → string                             ,kernel
+⍚     ,[ → ⟨               ,      ,list of pairs → map                                     ,kernel
+⍛     ,⟨ → [               ,      ,map → list of pairs                                     ,kernel
+⊛     ,a → a a             ,      ,dup: __stack__ ⍊                                        ,lib
+⊖     ,_ →                 ,      ,drop: __stack__ ⍂ ⊖ (pop and discard)                  ,lib
+⇅     ,a b → b a           ,      ,swap: via temp register                                 ,lib
+:     ,_ →                 ,      ,bind: reads name sets in scope map                      ,lib
+@     ,_ → *               ,[*]   ,scoped eval: push fresh scope ⊛ pop                     ,lib
+'     ,→ "                 ,[i]   ,char literal: {⍞}                                       ,lib
+⎕     ,→ _                 ,[i]   ,syntactic unit: parse from __input__                    ,lib
+↶     ,→                   ,[b]   ,undo: __history__ ⍂                                     ,lib
+↷     ,→                   ,[b]   ,redo: __history__ ⍁                                     ,lib
+✂     ,→                   ,[b r] ,cut: copy + delete                                      ,lib
+⎘     ,→ "                 ,[r]   ,yank: selection text → __kill__                         ,lib
+p     ,→                   ,[b]   ,paste: __kill__ ⍊ ⎗                                     ,lib
+P     ,→                   ,[b]   ,paste before                                            ,lib
+≠     ,_ _ → 1             ,      ,not equal: = 1 ⇅ -                                      ,lib
+≤     ,1 1 → 1             ,      ,lte: > 1 ⇅ -                                            ,lib
+≥     ,1 1 → 1             ,      ,gte: < 1 ⇅ -                                            ,lib
+∧     ,1 1 → 1             ,      ,and                                                     ,lib
+∨     ,1 1 → 1             ,      ,or                                                      ,lib
+¬     ,1 → 1               ,      ,not                                                     ,lib
+⍣     ,{ 1 → *             ,      ,repeat N times                                          ,lib
+⍤     ,{ → *               ,      ,while: repeat while TOS truthy                          ,lib
+¨     ,{ [ → [             ,      ,map: apply block to each element                        ,lib
+⊂     ,* 1 → [             ,      ,collect top N items into list                           ,lib
+⊃     ,[ → *               ,      ,spread list items onto stack                            ,lib
+⊣     ,[ → _ / [ → [       ,      ,head / tail                                             ,lib
+⊢     ,[ → _ / [ → [       ,      ,head / tail                                             ,lib
+⌽     ,[ → [               ,      ,reverse                                                 ,lib
+⍋     ,[ → [               ,      ,sort asc                                                ,lib
+⍒     ,[ → [               ,      ,sort desc                                               ,lib
+∊     ,_ [ → 1             ,      ,member of (returns 1/0)                                 ,lib
+⍳     ,_ [ → 1             ,      ,index of (-1 if not found)                              ,lib
+⍎     ," → _"              ,      ,parse JSON/literal → value                              ,lib
+⍕     ,_ → "               ,      ,format value → JSON/string                              ,lib
+⍉     ,[ → [               ,      ,transpose (list of lists)                               ,lib
+i     ,→                   ,[b i] ,insert until \0 (interactive)                           ,lib
+✎     ,→                   ,[b i] ,insert until ✐ (scripts)                                ,lib
+a     ,→                   ,[b i] ,append                                                  ,lib
+o     ,→                   ,[b i] ,open below                                              ,lib
+O     ,→                   ,[b i] ,open above                                              ,lib
+⏮     ,→                   ,[s]   ,word backward                                           ,lib
+⏭     ,→                   ,[s]   ,word forward                                            ,lib
+⇞     ,→                   ,[s]   ,page up                                                 ,lib
+⇟     ,→                   ,[s]   ,page down                                               ,lib
+𜱪     ,→                   ,[s]   ,select all                                              ,lib
+⌹     ," →"                ,[s]   ,split by regex                                          ,lib
+◇     ,→                   ,[s]   ,expand                                                  ,lib
+◆     ,→                   ,[s]   ,shrink                                                  ,lib
+⊏     ," →"                ,[s]   ,select inner (textobject)                               ,lib
+⊐     ," →"                ,[s]   ,select outer (textobject)                               ,lib
+/     ," →"                ,[s]   ,search forward: split buffer by pattern                 ,lib
+n     ,→                   ,[s]   ,next match                                              ,lib
+N     ,→                   ,[s]   ,prev match                                              ,lib
+⊜     ,{ →                 ,[s]   ,keep selections where block truthy                      ,lib
+⊝     ,{ →                 ,[s]   ,reject selections where block truthy                    ,lib
+⊞     ,→ _                 ,      ,new buffer (push to __buffers__)                        ,lib
+⊠     ,→                   ,[r]   ,close buffer                                            ,lib
+⊡     ," →"                ,[b]   ,switch to buffer by name                                ,lib
+⚠     ," →"                ,[r]   ,raise: push to __errors__                               ,lib
+⊘     ,→                   ,[r]   ,clear errors                                            ,lib
+$     ,{ → *               ,[r]   ,execute as single undo unit                             ,lib
+🗺     ," { →"              ,      ,bind key in mode map                                    ,lib
+⋯     ,→ *                 ,[*]   ,repeat last command                                     ,lib
