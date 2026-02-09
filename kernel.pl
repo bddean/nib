@@ -66,8 +66,8 @@ initial_scope(Scope) :-
 '⧺', concat  ==>  [B, A] ⊸ [C],  {vcat(A, B, C)}.
 '=', eq      ==>  [B, A] ⊸ [R],  {(A == B -> R = 1; R = 0)}.
 '⊛', eval    ==>  [X]    ⊸ [],   exec(X).
-'⟰', scope_get ==>  [] ⊸ [S],  scope_push(S).
-'⟱', scope_set ==>  [S] ⊸ [],  scope_pop(S).
+'⟰', cont_get ==>  cont_get.
+'⟱', cont_set ==>  cont_set.
 
 %% --- arithmetic ---
 
@@ -94,6 +94,8 @@ initial_scope(Scope) :-
 '⌿', slice    ==>  [E, S, A] ⊸ [R],  {vslice(A, S, E, R)}.
 '⩐', set_at   ==>  [V, K, Coll] ⊸ [R], {vset(Coll, K, V, R)}.
 '⩑', del_at   ==>  [K, Coll] ⊸ [R],  {vdel(Coll, K, R)}.
+'⊲', cons     ==>  [X, L] ⊸ [[X|L]].
+'⊳', snoc     ==>  [X, L] ⊸ [R],   {append(L, [X], R)}.
 
 %% --- construction ---
 
@@ -121,11 +123,21 @@ initial_scope(Scope) :-
 
 '⧰', is_num  ==>  [X] ⊸ [R],  {(number(X) -> R = 1; R = 0)}.
 
+%% --- io ---
+
+'⍟', log     ==>  [X] ⊸ [],  {vlog(X)}.
+
 %% --- helpers ---
 
-scope_push(S, C, C) :- dict_pairs(C.scope, _, Ps), dict_pairs(S, map, Ps).
-scope_pop(S, C0, C) :- dict_pairs(S, _, Ps), dict_pairs(Sc, scope, Ps),
-	put_dict(scope, C0, Sc, C).
+%% ⟰: push entire continuation onto the stack as a map
+cont_get(C0, C) :-
+	dict_pairs(C0, _, Ps), dict_pairs(M, map, Ps),
+	C = C0.put(stack, [M|C0.stack]).
+
+%% ⟱: pop map from stack, install as entire continuation
+cont_set(C0, C) :-
+	C0.stack = [M|_],
+	dict_pairs(M, _, Ps), dict_pairs(C, c, Ps).
 
 vcat(A, B, C) :- is_list(A), !, append(A, B, C).
 vcat(A, B, C) :- atom_concat(A, B, C).
@@ -159,3 +171,5 @@ to_pairs([K, V|T], [K-V|Ps]) :- to_pairs(T, Ps).
 map_to_pairs(M, L) :- dict_pairs(M, _, Ps), from_pairs(Ps, L).
 from_pairs([], []).
 from_pairs([K-V|T], [K, V|L]) :- from_pairs(T, L).
+
+vlog(X) :- write(X), nl.

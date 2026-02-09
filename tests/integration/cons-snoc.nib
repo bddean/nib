@@ -1,0 +1,2 @@
+# cons 1 onto [], snoc 2, snoc 3 → [1,2,3], index 2
+∅ 1 ⊲ 2 ⊳ 3 ⊳ 2 · ⍟

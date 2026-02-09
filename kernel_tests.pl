@@ -109,34 +109,52 @@ test(eval_prim) :-
 
 :- end_tests(eval).
 
-:- begin_tests(scope_get_set).
+:- begin_tests(continuation).
 
-test(scope_get_pushes_map) :-
-	%% · pushes the entire scope as a map value
+test(cont_get_pushes_map) :-
+	%% ⟰ pushes entire continuation as a map
 	run_prog(['⟰'], S),
-	S.stack = [Scope],
-	is_dict(Scope).
+	S.stack = [Cont],
+	is_dict(Cont).
 
-test(scope_get_contains_ops) :-
-	%% the pushed scope map should contain kernel ops
+test(cont_get_has_scope) :-
+	%% the continuation map contains scope with kernel ops
 	run_prog(['⟰'], S),
-	S.stack = [Scope],
+	S.stack = [Cont],
+	get_dict(scope, Cont, Scope),
 	get_dict('~', Scope, prim('~')).
 
-test(scope_set_replaces) :-
-	%% ⩐ pops a map and installs it as scope
-	%% after setting empty-ish scope, previously defined ops won't dispatch
-	run_prog(['⟰', '⟱'], S),
-	%% just verify it doesn't crash — scope round-trips
-	S.stack == [].
+test(cont_get_has_stack) :-
+	%% the continuation captures the current stack
+	run_prog([42, '⟰'], S),
+	S.stack = [Cont, 42],
+	get_dict(stack, Cont, Stack),
+	Stack == [42].
 
-test(scope_roundtrip) :-
-	%% · then ⩐ should be identity on scope
-	run_prog(['⟰', '⟱', '⟰'], S),
+test(cont_get_has_input) :-
+	%% the continuation captures remaining input
+	%% ⟰ followed by x: at capture time input is [x]
+	run_prog(['⟰', x], S),
+	%% after ⟰ runs, x is still in input and runs next
+	S.stack = [x, Cont],
+	get_dict(input, Cont, [x]).
+
+test(cont_extract_scope) :-
+	%% ⟰ pushes cont, scope pushes atom, · indexes cont by 'scope'
+	run_prog(['⟰', scope, '·'], S),
 	S.stack = [Scope],
+	is_dict(Scope),
 	get_dict('~', Scope, prim('~')).
 
-:- end_tests(scope_get_set).
+test(cont_set_restores) :-
+	%% build a continuation dict manually and restore it
+	%% the dict must have input, stack, scope keys
+	initial_scope(Sc),
+	dict_pairs(ScMap, map, [input-[], stack-[99], scope-Sc]),
+	run(c{input: [ScMap, '⟱'], stack: [], scope: Sc}, S),
+	S.stack == [99].
+
+:- end_tests(continuation).
 
 :- begin_tests(word_dispatch).
 
@@ -194,7 +212,7 @@ test(has_all_kernel_ops) :-
 	get_dict('⟰', Sc, prim('⟰')),
 	get_dict('⟱', Sc, prim('⟱')).
 
-test(count, [true(Len == 43)]) :-
+test(count, [true(Len == 46)]) :-
 	initial_scope(Sc),
 	dict_pairs(Sc, _, Pairs),
 	length(Pairs, Len).
@@ -263,6 +281,11 @@ test(length_map) :-
 	run_prog([[a, 1, b, 2], '⍚', '‖'], S),
 	S.stack == [2].
 
+test(cons) :- run_stack([[], 1, '⊲'], [[1]]).
+test(cons_nonempty) :- run_stack([[2, 3], 1, '⊲'], [[1, 2, 3]]).
+test(snoc) :- run_stack([[], 1, '⊳'], [[1]]).
+test(snoc_nonempty) :- run_stack([[1, 2], 3, '⊳'], [[1, 2, 3]]).
+
 :- end_tests(sequence).
 
 :- begin_tests(construction).
@@ -296,5 +319,26 @@ test(is_num_no) :- run_stack([hello, '⧰'], [0]).
 test(is_num_list) :- run_stack([[1], '⧰'], [0]).
 
 :- end_tests(type_check).
+
+:- begin_tests(log).
+
+test(log_atom) :-
+	with_output_to(string(Out), run_stack([hello, '⍟'], [])),
+	Out == "hello\n".
+
+test(log_number) :-
+	with_output_to(string(Out), run_stack([42, '⍟'], [])),
+	Out == "42\n".
+
+test(log_list) :-
+	with_output_to(string(Out), run_stack([[1, 2, 3], '⍟'], [])),
+	Out == "[1,2,3]\n".
+
+test(log_consumes) :-
+	%% log should pop the value off the stack
+	with_output_to(string(_), run_stack([a, b, '⍟'], [a])),
+	true.
+
+:- end_tests(log).
 
 :- run_tests.
