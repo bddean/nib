@@ -1,5 +1,4 @@
-:- module(kernel, [run/2, run_zip/2, step/2, initial_scope/1]).
-:- use_module(zipper).
+:- module(kernel, [run/2, step/2, initial_scope/1]).
 
 %% c{input, stack, scope}
 %% q(Body) — quotation (Body = token list)
@@ -39,26 +38,8 @@ term_expansion((Op, Name ==> Body), [
 
 %% --- execution ---
 
-%% run/2: single continuation (convenience)
 run(C, C) :- C.input = [], !.
 run(C0, C) :- step(C0, C1), run(C1, C).
-
-%% run_zip/2: zipper of continuations
-run_zip(_-[], _-[]) :- !.                        %% all killed
-run_zip(Z, Z) :- zipper([C]>>(get_dict(input, C, [])), Z), !.
-run_zip(Z0, Z) :-
-	zip_flatmap([C0, Cs]>>step_multi(C0, Cs), Z0, Z1),
-	run_zip(Z1, Z).
-
-%% step_multi: step one continuation → list of continuations
-%% normal op: [C'], fork: [C1, C2, ...], kill: []
-step_multi(C0, [C0]) :- C0.input = [], !.       %% exhausted, keep as-is
-step_multi(C0, Cs) :- step(C0, C1),
-	( C1 = fork(Elems, Base) ->
-		maplist([E, C]>>(C = Base.put(stack, [E|Base.stack])), Elems, Cs)
-	; C1 = kill -> Cs = []
-	; Cs = [C1]
-	).
 
 step(C0, C) :-
 	C0.input = [T|I], C1 = C0.put(input, I),
@@ -90,16 +71,6 @@ initial_scope(Scope) :-
 
 '⟰', cont_get ==>  cont_get.
 '⟱', cont_set ==>  cont_set.
-
-%% --- zipper (fork/kill) ---
-%% these return control signals, not new states
-
-kernel_op_name('⋔', fork).
-kernel_op('⋔', C0, fork(Elems, C)) :-
-	C0.stack = [Elems|Rest], C = C0.put(stack, Rest).
-
-kernel_op_name('✗', kill).
-kernel_op('✗', _, kill).
 
 %% --- arithmetic ---
 
